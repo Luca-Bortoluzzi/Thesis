@@ -1,0 +1,14 @@
+#!/bin/bash
+# Auto-generated startup file for node: router
+set -e
+
+# eth0 -> lan1
+ip link set eth0 up
+ip addr add 10.0.1.1/24 dev eth0
+
+# eth1 -> dmz
+ip link set eth1 up
+ip addr add 10.0.2.1/24 dev eth1
+
+# Enable IPv4 forwarding
+sysctl -w net.ipv4.ip_forward=1

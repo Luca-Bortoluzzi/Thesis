@@ -1,0 +1,10 @@
+#!/bin/bash
+# Auto-generated startup file for node: client
+set -e
+
+# eth0 -> lan1
+ip link set eth0 up
+ip addr add 10.0.1.10/24 dev eth0
+
+# Default gateway
+ip route add default via 10.0.1.1

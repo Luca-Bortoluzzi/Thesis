@@ -1,0 +1,24 @@
+#!/bin/bash
+# Auto-generated startup file for node: r1
+set -e
+
+# eth0 -> lan_a
+ip link set eth0 up
+ip addr add 10.10.1.1/24 dev eth0
+
+# eth1 -> r1_r2
+ip link set eth1 up
+ip addr add 10.0.12.1/30 dev eth1
+
+# eth2 -> r1_r3
+ip link set eth2 up
+ip addr add 10.0.13.1/30 dev eth2
+
+# Enable IPv4 forwarding
+sysctl -w net.ipv4.ip_forward=1
+
+# Start FRR
+chown -R frr:frr /etc/frr || true
+chmod 640 /etc/frr/daemons || true
+chmod 640 /etc/frr/frr.conf || true
+service frr start || /usr/lib/frr/frrinit.sh start || true
