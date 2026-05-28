@@ -1,7 +1,7 @@
 # Auto-generated FRR daemons file
 zebra=yes
-bgpd=no
-ospfd=yes
+bgpd=yes
+ospfd=no
 ripd=no
 ospf6d=no
 ripngd=no

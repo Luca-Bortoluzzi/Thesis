@@ -26,6 +26,7 @@ Quindi:
 - niente if;
 - niente vtysh automatico;
 - avvio FRR con systemctl start frr.
+- per BGP aggiunge automaticamente no bgp ebgp-requires-policy e no bgp network import-check.
 
 Uso:
     python3 generate_lab.py configs/extended-mesh-lans.yml --clean
@@ -353,6 +354,18 @@ def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
 
         if frr.get("router_id"):
             lines.append(f" bgp router-id {frr['router_id']}")
+
+        # FRR, nelle versioni recenti, richiede policy esplicite per eBGP.
+        # Nei laboratori didattici abilitiamo automaticamente l'annuncio/ricezione
+        # senza policy, altrimenti i neighbor possono stabilirsi ma le rotte non
+        # vengono accettate o propagate.
+        if frr.get("ebgp_requires_policy", False) is False:
+            lines.append(" no bgp ebgp-requires-policy")
+
+        # Permette di annunciare le reti indicate in frr.networks senza blocchi
+        # dovuti al controllo di import/check sul network statement.
+        if frr.get("network_import_check", False) is False:
+            lines.append(" no bgp network import-check")
 
         for neighbor in frr.get("neighbors", []):
             lines.append(f" neighbor {neighbor['ip']} remote-as {neighbor['remote_as']}")

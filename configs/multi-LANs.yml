@@ -2,6 +2,13 @@ lab_name: multi-lans
 
 description: Topologia con più LAN collegate tramite router in maglia estesa con OSPF.
 
+metadata:
+  description: "Multi-LAN OSPF or RIP topology"
+  version: 2.0
+  author: "Luca-Bortoluzzi"
+  email: "luca.bortoluzzi921@edu.unito.it"
+  web: "http://www.kathara.org/"
+
 nodes:
   pc_a:
     type: host
@@ -94,3 +101,6 @@ nodes:
       protocol: ospf
       router_id: 4.4.4.4
       area: 0
+
+
+

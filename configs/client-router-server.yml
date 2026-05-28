@@ -1,5 +1,14 @@
 lab_name: client-router-server
 
+description: semplice topologia con LAN e DMZ 
+
+metadata:
+  description: "Multi-AS BGP topology"
+  version: 2.0
+  author: "Luca-Bortoluzzi"
+  email: "luca.bortoluzzi921@edu.unito.it"
+  web: "http://www.kathara.org/"
+
 nodes:
   client:
     type: host

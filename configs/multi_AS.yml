@@ -1,8 +1,43 @@
-ab_name: multi-AS
+lab_name: multi-AS
 
-description: Topologia con più LAN collegate tramite router in maglia estesa con OSPF.
+description: Topologia multi-AS con più LAN collegate tramite router in maglia estesa con eBGP.
+
+metadata:
+  description: "Multi-AS BGP topology"
+  version: 2.0
+  author: "Luca-Bortoluzzi"
+  email: "luca.bortoluzzi921@edu.unito.it"
+  web: "http://www.kathara.org/"
 
 nodes:
+  pc_a:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.10/24
+    default_gateway: 10.10.1.1
+
+  pc_b:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.10/24
+    default_gateway: 10.10.2.1
+
+  pc_c:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.10/24
+    default_gateway: 10.10.3.1
+
+  pc_d:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.10/24
+    default_gateway: 10.10.4.1
+
   r1:
     type: router
     interfaces:
@@ -14,9 +49,16 @@ nodes:
         ip: 10.0.13.1/30
     frr:
       enabled: true
-      protocol: ospf
+      protocol: bgp
+      asn: 65001
       router_id: 1.1.1.1
-      area: 0
+      networks:
+        - 10.10.1.0/24
+      neighbors:
+        - ip: 10.0.12.2
+          remote_as: 65002
+        - ip: 10.0.13.2
+          remote_as: 65003
 
   r2:
     type: router
@@ -31,9 +73,18 @@ nodes:
         ip: 10.0.24.1/30
     frr:
       enabled: true
-      protocol: ospf
+      protocol: bgp
+      asn: 65002
       router_id: 2.2.2.2
-      area: 0
+      networks:
+        - 10.10.2.0/24
+      neighbors:
+        - ip: 10.0.12.1
+          remote_as: 65001
+        - ip: 10.0.23.2
+          remote_as: 65003
+        - ip: 10.0.24.2
+          remote_as: 65004
 
   r3:
     type: router
@@ -48,9 +99,18 @@ nodes:
         ip: 10.0.34.1/30
     frr:
       enabled: true
-      protocol: ospf
+      protocol: bgp
+      asn: 65003
       router_id: 3.3.3.3
-      area: 0
+      networks:
+        - 10.10.3.0/24
+      neighbors:
+        - ip: 10.0.13.1
+          remote_as: 65001
+        - ip: 10.0.23.1
+          remote_as: 65002
+        - ip: 10.0.34.2
+          remote_as: 65004
 
   r4:
     type: router
@@ -63,6 +123,13 @@ nodes:
         ip: 10.0.34.2/30
     frr:
       enabled: true
-      protocol: ospf
+      protocol: bgp
+      asn: 65004
       router_id: 4.4.4.4
-      area: 0
+      networks:
+        - 10.10.4.0/24
+      neighbors:
+        - ip: 10.0.24.1
+          remote_as: 65002
+        - ip: 10.0.34.1
+          remote_as: 65003
