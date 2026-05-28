@@ -1,10 +1,3 @@
-#!/bin/bash
-# Auto-generated startup file for node: server
-set -e
+ip address add 10.0.2.10/24 dev eth0
 
-# eth0 -> dmz
-ip link set eth0 up
-ip addr add 10.0.2.10/24 dev eth0
-
-# Default gateway
 ip route add default via 10.0.2.1

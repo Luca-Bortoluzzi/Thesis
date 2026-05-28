@@ -1,10 +1,3 @@
-#!/bin/bash
-# Auto-generated startup file for node: pc_a
-set -e
+ip address add 10.10.1.10/24 dev eth0
 
-# eth0 -> lan_a
-ip link set eth0 up
-ip addr add 10.10.1.10/24 dev eth0
-
-# Default gateway
 ip route add default via 10.10.1.1
