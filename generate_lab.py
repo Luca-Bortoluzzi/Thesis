@@ -2,20 +2,37 @@
 """
 generate_lab.py
 
-Script unico per generare un laboratorio Kathara a partire da un file YAML.
+Generatore minimale di laboratori Kathara a partire da file YAML.
 
-Uso consigliato:
-    python3 generate_lab.py configs/lan-dmz.yml
-    python3 generate_lab.py configs/extended-mesh-lans.yml
-    python3 generate_lab.py extended-mesh-lans --config-dir configs --output-dir labs
+Output:
+- lab.conf nel formato Kathara classico;
+- <device>.startup per ogni dispositivo;
+- per router/switch/firewall:
+    <device>/etc/frr/daemons
+    <device>/etc/frr/frr.conf
+    <device>/etc/frr/vtysh.conf
 
-Lo script genera:
-    labs/<lab_name>/
-    ├── lab.conf
-    ├── <nodo>.startup
-    ├── <router>/etc/frr/daemons       se il nodo ha sezione frr
-    ├── <router>/etc/frr/frr.conf      se il nodo ha sezione frr
-    └── README.md
+Formato .startup dei router/switch/firewall:
+    ip address add 172.16.1.1/24 dev eth0
+
+    ip route add default via 172.16.1.2
+
+    systemctl start frr
+
+Quindi:
+- niente shebang;
+- niente set -e;
+- niente echo;
+- niente if;
+- niente vtysh automatico;
+- avvio FRR con systemctl start frr.
+
+Uso:
+    python3 generate_lab.py configs/extended-mesh-lans.yml --clean
+    python3 generate_lab.py extended-mesh-lans --config-dir configs --output-dir labs --clean
+
+Dipendenza:
+    pip install pyyaml
 """
 
 import argparse
@@ -33,6 +50,15 @@ except ImportError:
     sys.exit(1)
 
 
+FRR_DEVICE_TYPES = {"router", "switch", "firewall"}
+BASE_IMAGE = "kathara/base"
+FRR_IMAGE = "kathara/frr"
+
+
+# ---------------------------------------------------------------------------
+# Lettura e validazione YAML
+# ---------------------------------------------------------------------------
+
 def load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"File YAML non trovato: {path}")
@@ -47,17 +73,6 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def resolve_config_path(argument: str, config_dir: Path) -> Path:
-    """
-    Permette due modalità:
-    1. passare direttamente il file:
-         python3 generate_lab.py configs/lan-dmz.yml
-
-    2. passare solo il nome del lab:
-         python3 generate_lab.py lan-dmz --config-dir configs
-       In questo caso cerca:
-         configs/lan-dmz.yml
-         configs/lan-dmz.yaml
-    """
     candidate = Path(argument)
 
     if candidate.exists():
@@ -93,6 +108,9 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"Il nodo {node_name} deve avere almeno una interfaccia.")
 
         for index, interface in enumerate(interfaces):
+            if not isinstance(interface, dict):
+                raise ValueError(f"Il nodo {node_name}, interfaccia {index}, non è valida.")
+
             if "network" not in interface:
                 raise ValueError(
                     f"Il nodo {node_name}, interfaccia {index}, non ha il campo network."
@@ -112,29 +130,18 @@ def prepare_lab_directory(lab_dir: Path, clean: bool, force: bool) -> None:
     lab_dir.mkdir(parents=True, exist_ok=True)
 
 
-def generate_lab_conf(nodes: dict[str, Any]) -> str:
-    lines = [
-        "# Auto-generated lab.conf",
-        ""
-    ]
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
 
-    for node_name, node_data in nodes.items():
-        for index, interface in enumerate(node_data["interfaces"]):
-            network = interface["network"]
-            lines.append(f'{node_name}[{index}]="{network}"')
-
-    return "\n".join(lines) + "\n"
+def node_type(node_data: dict[str, Any]) -> str:
+    return str(node_data.get("type", "host")).lower()
 
 
-def get_network_from_ip(ip_with_prefix: str) -> str:
-    """
-    Esempio:
-        10.0.12.1/30 -> 10.0.12.0/30
-    """
-    return str(ipaddress.ip_interface(ip_with_prefix).network)
+def is_frr_device(node_data: dict[str, Any]) -> bool:
+    if node_type(node_data) in FRR_DEVICE_TYPES:
+        return True
 
-
-def frr_enabled(node_data: dict[str, Any]) -> bool:
     frr = node_data.get("frr")
     if not frr:
         return False
@@ -145,17 +152,120 @@ def frr_enabled(node_data: dict[str, Any]) -> bool:
     return True
 
 
-def get_frr_protocol(node_data: dict[str, Any]) -> str:
+def get_node_image(node_data: dict[str, Any]) -> str:
+    image = node_data.get("image")
+
+    if image:
+        return str(image)
+
+    if is_frr_device(node_data):
+        return FRR_IMAGE
+
+    return BASE_IMAGE
+
+
+def get_network_from_ip(ip_with_prefix: str) -> str:
+    return str(ipaddress.ip_interface(ip_with_prefix).network)
+
+
+def get_frr_section(node_data: dict[str, Any]) -> dict[str, Any]:
     frr = node_data.get("frr", {})
-    return str(frr.get("protocol", "ospf")).lower()
+    if frr is None:
+        return {}
+    if not isinstance(frr, dict):
+        raise ValueError("La sezione frr deve essere un dizionario.")
+    return frr
+
+
+def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
+    frr = get_frr_section(node_data)
+    protocols: list[str] = []
+
+    if "protocol" in frr:
+        protocols.append(str(frr["protocol"]).lower())
+
+    if "protocols" in frr:
+        for proto in frr["protocols"]:
+            protocols.append(str(proto).lower())
+
+    daemons = frr.get("daemons", {})
+    if isinstance(daemons, dict):
+        if daemons.get("ospfd"):
+            protocols.append("ospf")
+        if daemons.get("ripd"):
+            protocols.append("rip")
+        if daemons.get("bgpd"):
+            protocols.append("bgp")
+
+    result = []
+    for proto in protocols:
+        if proto not in result:
+            result.append(proto)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# lab.conf
+# ---------------------------------------------------------------------------
+
+def generate_lab_conf(config: dict[str, Any]) -> str:
+    lab_name = config["lab_name"]
+    nodes = config["nodes"]
+    metadata = config.get("metadata", {})
+
+    description = metadata.get("description", config.get("description", lab_name))
+    version = metadata.get("version", "2.0")
+    author = metadata.get("author", "Luca-Bortoluzzi")
+    email = metadata.get("email", "luca.bortoluzzi921@edu.unito.it")
+    web = metadata.get("web", "http://www.kathara.org/")
+
+    lines = [
+        f'LAB_DESCRIPTION="{description}"',
+        f"LAB_VERSION={version}",
+        f'LAB_AUTHOR="{author}"',
+        f"LAB_EMAIL={email}",
+        f"LAB_WEB={web}",
+        "",
+    ]
+
+    for node_name, node_data in nodes.items():
+        for index, interface in enumerate(node_data["interfaces"]):
+            network = interface["network"]
+            lines.append(f'{node_name}[{index}]="{network}"')
+
+        lines.append(f'{node_name}[image]="{get_node_image(node_data)}"')
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# FRR
+# ---------------------------------------------------------------------------
+
+def get_frr_networks(node_data: dict[str, Any]) -> list[str]:
+    frr = get_frr_section(node_data)
+    networks = frr.get("networks")
+
+    if networks:
+        return [str(network) for network in networks]
+
+    result = []
+    for interface in node_data["interfaces"]:
+        ip_addr = interface.get("ip")
+        if ip_addr:
+            result.append(get_network_from_ip(ip_addr))
+
+    return result
 
 
 def generate_frr_daemons(node_data: dict[str, Any]) -> str:
-    protocol = get_frr_protocol(node_data)
+    protocols = get_frr_protocols(node_data)
 
-    ospfd = "yes" if protocol == "ospf" else "no"
-    bgpd = "yes" if protocol == "bgp" else "no"
-    ripd = "yes" if protocol == "rip" else "no"
+    ospfd = "yes" if "ospf" in protocols else "no"
+    ripd = "yes" if "rip" in protocols else "no"
+    bgpd = "yes" if "bgp" in protocols else "no"
 
     return f"""# Auto-generated FRR daemons file
 zebra=yes
@@ -183,151 +293,80 @@ ripd_options="   -A 127.0.0.1"
 """
 
 
-def generate_ospf_conf(node_name: str, node_data: dict[str, Any]) -> str:
-    frr = node_data.get("frr", {})
-    router_id = frr.get("router_id")
-    area = frr.get("area", 0)
-
-    networks = frr.get("networks")
-    if not networks:
-        networks = []
-        for interface in node_data["interfaces"]:
-            ip_addr = interface.get("ip")
-            if ip_addr:
-                networks.append(get_network_from_ip(ip_addr))
-
-    lines = [
+def generate_minimal_frr_conf(node_name: str) -> str:
+    return "\n".join([
         "frr defaults traditional",
         f"hostname {node_name}",
         "service integrated-vtysh-config",
         "!",
-        "router ospf"
-    ]
-
-    if router_id:
-        lines.append(f" ospf router-id {router_id}")
-
-    for network in networks:
-        lines.append(f" network {network} area {area}")
-
-    lines.extend([
-        "!",
         "line vty",
-        "!"
-    ])
-
-    return "\n".join(lines) + "\n"
-
-
-def generate_bgp_conf(node_name: str, node_data: dict[str, Any]) -> str:
-    frr = node_data.get("frr", {})
-
-    if "asn" not in frr:
-        raise ValueError(f"Il nodo {node_name} usa BGP ma manca frr.asn")
-
-    asn = frr["asn"]
-    router_id = frr.get("router_id")
-    networks = frr.get("networks", [])
-    neighbors = frr.get("neighbors", [])
-
-    lines = [
-        "frr defaults traditional",
-        f"hostname {node_name}",
-        "service integrated-vtysh-config",
         "!",
-        f"router bgp {asn}"
-    ]
-
-    if router_id:
-        lines.append(f" bgp router-id {router_id}")
-
-    for neighbor in neighbors:
-        lines.append(f" neighbor {neighbor['ip']} remote-as {neighbor['remote_as']}")
-
-    for network in networks:
-        lines.append(f" network {network}")
-
-    lines.extend([
-        "!",
-        "line vty",
-        "!"
+        "",
     ])
-
-    return "\n".join(lines) + "\n"
 
 
 def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
-    """
-    Se nello YAML è presente frr.config, viene usata direttamente.
-    Altrimenti genera una configurazione automatica OSPF/BGP minima.
-    """
-    frr = node_data.get("frr", {})
+    frr = get_frr_section(node_data)
 
     if "config" in frr:
         return str(frr["config"]).rstrip() + "\n"
 
-    protocol = get_frr_protocol(node_data)
+    protocols = get_frr_protocols(node_data)
+    if not protocols:
+        return generate_minimal_frr_conf(node_name)
 
-    if protocol == "ospf":
-        return generate_ospf_conf(node_name, node_data)
-
-    if protocol == "bgp":
-        return generate_bgp_conf(node_name, node_data)
-
-    raise ValueError(f"Protocollo FRR non supportato sul nodo {node_name}: {protocol}")
-
-
-def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
     lines = [
-        "#!/bin/bash",
-        f"# Auto-generated startup file for node: {node_name}",
-        "set -e",
-        ""
+        "frr defaults traditional",
+        f"hostname {node_name}",
+        "service integrated-vtysh-config",
+        "!",
     ]
 
-    for index, interface in enumerate(node_data["interfaces"]):
-        network = interface["network"]
-        ip_addr = interface.get("ip")
+    if "ospf" in protocols:
+        router_id = frr.get("router_id")
+        area = frr.get("area", 0)
 
-        lines.append(f"# eth{index} -> {network}")
-        lines.append(f"ip link set eth{index} up")
+        lines.append("router ospf")
+        if router_id:
+            lines.append(f" ospf router-id {router_id}")
 
-        if ip_addr:
-            lines.append(f"ip addr add {ip_addr} dev eth{index}")
+        for network in get_frr_networks(node_data):
+            lines.append(f" network {network} area {area}")
 
-        lines.append("")
+        lines.append("!")
 
-    node_type = str(node_data.get("type", "host")).lower()
+    if "rip" in protocols:
+        lines.append("router rip")
+        lines.append(" version 2")
+        lines.append(" no auto-summary")
 
-    if node_type in ("router", "firewall") or frr_enabled(node_data):
-        lines.append("# Enable IPv4 forwarding")
-        lines.append("sysctl -w net.ipv4.ip_forward=1")
-        lines.append("")
+        for network in get_frr_networks(node_data):
+            lines.append(f" network {network}")
 
-    if node_data.get("default_gateway"):
-        lines.append("# Default gateway")
-        lines.append(f"ip route add default via {node_data['default_gateway']}")
-        lines.append("")
+        lines.append("!")
 
-    if node_data.get("routes"):
-        lines.append("# Static routes")
-        for route in node_data["routes"]:
-            lines.append(f"ip route add {route['to']} via {route['via']}")
-        lines.append("")
+    if "bgp" in protocols:
+        if "asn" not in frr:
+            raise ValueError(f"Il nodo {node_name} usa BGP ma manca frr.asn")
 
-    if frr_enabled(node_data):
-        lines.append("# Start FRR")
-        lines.append("chown -R frr:frr /etc/frr || true")
-        lines.append("chmod 640 /etc/frr/daemons || true")
-        lines.append("chmod 640 /etc/frr/frr.conf || true")
-        lines.append("service frr start || /usr/lib/frr/frrinit.sh start || true")
-        lines.append("")
+        lines.append(f"router bgp {frr['asn']}")
 
-    if node_data.get("commands"):
-        lines.append("# Custom commands")
-        for command in node_data["commands"]:
-            lines.append(str(command))
-        lines.append("")
+        if frr.get("router_id"):
+            lines.append(f" bgp router-id {frr['router_id']}")
+
+        for neighbor in frr.get("neighbors", []):
+            lines.append(f" neighbor {neighbor['ip']} remote-as {neighbor['remote_as']}")
+
+        for network in frr.get("networks", []):
+            lines.append(f" network {network}")
+
+        lines.append("!")
+
+    lines.extend([
+        "line vty",
+        "!",
+        "",
+    ])
 
     return "\n".join(lines)
 
@@ -344,99 +383,105 @@ def write_frr_files(lab_dir: Path, node_name: str, node_data: dict[str, Any]) ->
     )
 
 
-def generate_readme(config: dict[str, Any]) -> str:
-    lab_name = config["lab_name"]
-    description = config.get("description", "Laboratorio Kathara generato automaticamente.")
-    nodes = config["nodes"]
+# ---------------------------------------------------------------------------
+# Startup Kathara nel formato richiesto
+# ---------------------------------------------------------------------------
 
-    lines = [
-        f"# {lab_name}",
-        "",
-        description,
-        "",
-        "## Nodi",
-        ""
-    ]
+def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
+    """
+    Genera un file .startup con il formato richiesto:
 
-    for node_name, node_data in nodes.items():
-        lines.append(f"### {node_name}")
-        lines.append("")
-        lines.append(f"- Tipo: `{node_data.get('type', 'host')}`")
+        ip address add 172.16.1.1/24 dev eth0
 
-        for index, interface in enumerate(node_data["interfaces"]):
-            lines.append(
-                f"- eth{index}: rete `{interface['network']}`, IP `{interface.get('ip', '-')}`"
-            )
+        ip route add default via 172.16.1.2
 
-        if node_data.get("default_gateway"):
-            lines.append(f"- Gateway: `{node_data['default_gateway']}`")
+        systemctl start frr
 
-        if frr_enabled(node_data):
-            lines.append(f"- FRR: `{get_frr_protocol(node_data)}`")
+    Non vengono generati script bash.
+    """
+    lines: list[str] = []
 
+    # Indirizzi IP sulle interfacce.
+    for index, interface in enumerate(node_data["interfaces"]):
+        ip_addr = interface.get("ip")
+        if ip_addr:
+            lines.append(f"ip address add {ip_addr} dev eth{index}")
+
+    # Riga vuota tra indirizzi e routing, se serve.
+    if lines and (node_data.get("default_gateway") or node_data.get("routes") or is_frr_device(node_data)):
         lines.append("")
 
-    lines.extend([
-        "## Avvio",
-        "",
-        "```bash",
-        "kathara lstart",
-        "```",
-        "",
-        "## Pulizia",
-        "",
-        "```bash",
-        "kathara lclean",
-        "```",
-        ""
-    ])
+    # Default gateway.
+    if node_data.get("default_gateway"):
+        lines.append(f"ip route add default via {node_data['default_gateway']}")
 
-    return "\n".join(lines)
+    # Rotte statiche opzionali.
+    if node_data.get("routes"):
+        for route in node_data["routes"]:
+            lines.append(f"ip route add {route['to']} via {route['via']}")
 
+    # Riga vuota tra routing e avvio FRR.
+    if is_frr_device(node_data):
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append("systemctl start frr")
+
+    # Comandi custom opzionali.
+    if node_data.get("commands"):
+        if lines and lines[-1] != "":
+            lines.append("")
+        for command in node_data["commands"]:
+            lines.append(str(command))
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Generazione laboratorio
+# ---------------------------------------------------------------------------
 
 def generate_lab(config_path: Path, output_dir: Path, clean: bool, force: bool) -> Path:
     config = load_yaml(config_path)
     validate_config(config)
 
-    lab_name = config["lab_name"]
+    lab_name = str(config["lab_name"])
     nodes = config["nodes"]
 
     lab_dir = output_dir / lab_name
     prepare_lab_directory(lab_dir, clean=clean, force=force)
 
-    (lab_dir / "lab.conf").write_text(generate_lab_conf(nodes), encoding="utf-8")
+    (lab_dir / "lab.conf").write_text(generate_lab_conf(config), encoding="utf-8")
 
     for node_name, node_data in nodes.items():
         startup_path = lab_dir / f"{node_name}.startup"
         startup_path.write_text(generate_startup(node_name, node_data), encoding="utf-8")
-        os.chmod(startup_path, 0o755)
+        os.chmod(startup_path, 0o644)
 
-        if frr_enabled(node_data):
+        if is_frr_device(node_data):
             write_frr_files(lab_dir, node_name, node_data)
-
-    (lab_dir / "README.md").write_text(generate_readme(config), encoding="utf-8")
 
     return lab_dir
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Genera i file Kathara necessari per il laboratorio selezionato."
+        description="Genera lab.conf, file .startup e configurazioni FRR per Kathara."
     )
 
     parser.add_argument(
         "lab",
-        help=(
-            "File YAML da leggere oppure nome del laboratorio. "
-            "Esempi: configs/lan-dmz.yml oppure lan-dmz"
-        )
+        help="File YAML da leggere oppure nome del laboratorio.",
     )
 
     parser.add_argument(
         "--config-dir",
         default="configs",
         type=Path,
-        help="Cartella dove cercare i file YAML se viene passato solo il nome del lab. Default: configs"
+        help="Cartella dove cercare i file YAML se viene passato solo il nome del lab. Default: configs",
     )
 
     parser.add_argument(
@@ -444,19 +489,19 @@ def parse_args() -> argparse.Namespace:
         "-o",
         default="labs",
         type=Path,
-        help="Cartella di output dei laboratori generati. Default: labs"
+        help="Cartella di output dei laboratori generati. Default: labs",
     )
 
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="Elimina e ricrea la cartella del laboratorio se esiste già."
+        help="Elimina e ricrea la cartella del laboratorio se esiste già.",
     )
 
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Sovrascrive i file se la cartella del laboratorio esiste già."
+        help="Sovrascrive i file se la cartella del laboratorio esiste già.",
     )
 
     return parser.parse_args()
@@ -471,17 +516,17 @@ def main() -> int:
             config_path=config_path,
             output_dir=args.output_dir,
             clean=args.clean,
-            force=args.force
+            force=args.force,
         )
 
         print(f"[OK] Configurazione letta: {config_path}")
         print(f"[OK] Laboratorio generato: {lab_dir}")
         print("")
-        print("Avvio:")
+        print("Per avviare:")
         print(f"  cd {lab_dir}")
         print("  kathara lstart")
         print("")
-        print("Pulizia:")
+        print("Per pulire:")
         print("  kathara lclean")
 
         return 0

@@ -3,34 +3,6 @@ ab_name: multi-AS
 description: Topologia con più LAN collegate tramite router in maglia estesa con OSPF.
 
 nodes:
-  pc_a:
-    type: host
-    interfaces:
-      - network: lan_a
-        ip: 10.10.1.10/24
-    default_gateway: 10.10.1.1
-
-  pc_b:
-    type: host
-    interfaces:
-      - network: lan_b
-        ip: 10.10.2.10/24
-    default_gateway: 10.10.2.1
-
-  pc_c:
-    type: host
-    interfaces:
-      - network: lan_c
-        ip: 10.10.3.10/24
-    default_gateway: 10.10.3.1
-
-  pc_d:
-    type: host
-    interfaces:
-      - network: lan_d
-        ip: 10.10.4.10/24
-    default_gateway: 10.10.4.1
-
   r1:
     type: router
     interfaces:
