@@ -640,6 +640,7 @@ docker run -d \
 echo ""
 echo "[OK] Wireshark automatico avviato."
 echo "Log sniffer:"
+echo "  ./sniff.sh"
 echo "  docker logs -f wireshark-sniffer-$LAB_NAME"
 echo "GUI Wireshark:"
 echo "  http://localhost:3000"
@@ -648,6 +649,29 @@ echo "  $CAPTURE_DIR"
 echo "Dentro Wireshark apri:"
 echo "  /captures"
 '''
+
+
+def generate_sniff_wireshark_script(lab_name: str) -> str:
+    quoted_lab = bash_quote(lab_name)
+    return f"""#!/bin/bash
+LAB_NAME={quoted_lab}
+CONTAINER="wireshark-sniffer-$LAB_NAME"
+
+if ! docker ps --format "{{{{.Names}}}}" | grep -qx "$CONTAINER"; then
+  echo "[ERRORE] Container sniffer non attivo: $CONTAINER"
+  echo "Avvia prima Wireshark con:"
+  echo "  ./start_wireshark.sh [any|eth0|eth1|...]"
+  echo ""
+  echo "Container Wireshark disponibili:"
+  docker ps --format "{{{{.Names}}}}" | grep '^wireshark-' || true
+  exit 1
+fi
+
+echo "[OK] Seguo i log dello sniffer: $CONTAINER"
+echo "[INFO] Premi CTRL+C per uscire dai log. Lo sniffing continuerà in background."
+echo ""
+exec docker logs -f "$CONTAINER"
+"""
 
 
 def generate_stop_wireshark_script(lab_name: str) -> str:
@@ -669,18 +693,21 @@ def write_wireshark_scripts(lab_dir: Path, lab_name: str, sniff_node: str | None
     """
     start_path = lab_dir / "start_wireshark.sh"
     stop_path = lab_dir / "stop_wireshark.sh"
+    sniff_path = lab_dir / "sniff.sh"
 
     if not sniff_node:
-        for script_path in (start_path, stop_path):
+        for script_path in (start_path, stop_path, sniff_path):
             if script_path.exists():
                 script_path.unlink()
         return False
 
     start_path.write_text(generate_start_wireshark_script(lab_name, sniff_node), encoding="utf-8")
     stop_path.write_text(generate_stop_wireshark_script(lab_name), encoding="utf-8")
+    sniff_path.write_text(generate_sniff_wireshark_script(lab_name), encoding="utf-8")
 
     os.chmod(start_path, 0o755)
     os.chmod(stop_path, 0o755)
+    os.chmod(sniff_path, 0o755)
     return True
 
 
@@ -811,6 +838,7 @@ def main() -> int:
         if wireshark_generated:
             print(f"Script Wireshark generati per il nodo: {selected_sniff_node}")
             print("  ./start_wireshark.sh [any|eth0|eth1|...]")
+            print("  ./sniff.sh")
             print("  ./stop_wireshark.sh")
         else:
             print("Script Wireshark non generati.")
