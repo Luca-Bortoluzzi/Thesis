@@ -14,23 +14,11 @@ Output:
 
 Formato .startup dei router/switch/firewall:
     ip address add 172.16.1.1/24 dev eth0
-
     ip route add default via 172.16.1.2
-
     systemctl start frr
 
-Quindi:
-- niente shebang;
-- niente set -e;
-- niente echo;
-- niente if;
-- niente vtysh automatico;
-- avvio FRR con systemctl start frr.
-- per BGP aggiunge automaticamente no bgp ebgp-requires-policy e no bgp network import-check.
-
 Uso:
-    python3 generate_lab.py configs/extended-mesh-lans.yml --clean
-    python3 generate_lab.py extended-mesh-lans --config-dir configs --output-dir labs --clean
+    python3 generate_lab.py configs/file.yml oppure ./generate_lab.py configs/file.yml
 
 Dipendenza:
     pip install pyyaml
