@@ -1,3 +1,0 @@
-ip address add 10.10.4.10/24 dev eth0
-
-ip route add default via 10.10.4.1
