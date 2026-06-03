@@ -1,0 +1,129 @@
+lab_name: Test1
+
+description: Primo test senza exploits
+
+metadata:
+  description: "Testing connections with a server"
+  version: 2.0
+  author: "Luca-Bortoluzzi"
+  email: "luca.bortoluzzi921@edu.unito.it"
+  web: "http://www.kathara.org/"
+
+nodes:
+  server:
+    type: host
+    interfaces:
+      - network: dmz
+        ip: 10.0.20.10/24
+    default_gateway: 10.0.20.1
+
+  pc_a:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.10/24
+    default_gateway: 10.10.1.1
+
+  pc_b:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.10/24
+    default_gateway: 10.10.2.1
+
+  pc_c:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.10/24
+    default_gateway: 10.10.3.1
+
+  pc_d:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.10/24
+    default_gateway: 10.10.4.1
+
+  r1:
+    type: router
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.1/24
+      - network: r1_r2
+        ip: 10.0.12.1/30
+      - network: r1_r3
+        ip: 10.0.13.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 1.1.1.1
+      area: 0
+
+  r2:
+    type: router
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.1/24
+      - network: r1_r2
+        ip: 10.0.12.2/30
+      - network: r2_r3
+        ip: 10.0.23.1/30
+      - network: r2_r4
+        ip: 10.0.24.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 2.2.2.2
+      area: 0
+
+  r3:
+    type: router
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.1/24
+      - network: r1_r3
+        ip: 10.0.13.2/30
+      - network: r2_r3
+        ip: 10.0.23.2/30
+      - network: r3_r4
+        ip: 10.0.34.1/30
+      - network: r3_r5
+        ip: 10.0.35.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 3.3.3.3
+      area: 0
+
+  r4:
+    type: router
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.1/24
+      - network: r2_r4
+        ip: 10.0.24.2/30
+      - network: r3_r4
+        ip: 10.0.34.2/30
+      - network: r4_r5
+        ip: 10.0.45.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 4.4.4.4
+      area: 0
+
+  r5:
+    type: router
+    interfaces:
+      - network: dmz
+        ip: 10.0.20.1/24
+      - network: r3_r5
+        ip: 10.0.35.2/30
+      - network: r4_r5
+        ip: 10.0.45.2/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 5.5.5.5
+      area: 0

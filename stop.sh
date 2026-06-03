@@ -7,11 +7,9 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-# Assign the parameter to a variable
-ENV_NAME=$1
 
 # Define the laboratory path
-LAB_PATH="./labs/$ENV_NAME"
+LAB_PATH="$1"
 
 # Check if the directory exists before running the command
 if [ -d "$LAB_PATH" ]; then

@@ -438,15 +438,297 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Wireshark automatico per lab Kathara
+# ---------------------------------------------------------------------------
+
+def bash_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def sniffable_nodes(config: dict[str, Any]) -> list[str]:
+    nodes = config["nodes"]
+    preferred = [name for name, data in nodes.items() if is_frr_device(data)]
+    return preferred if preferred else list(nodes.keys())
+
+
+def ask_yes_no(question: str, default: bool = False) -> bool:
+    default_label = "S/n" if default else "s/N"
+    answer = input(f"{question} [{default_label}]: ").strip().lower()
+    if not answer:
+        return default
+    return answer in {"s", "si", "sì", "y", "yes"}
+
+
+def choose_sniff_node(
+    config: dict[str, Any],
+    requested: str | None,
+    wireshark_mode: str,
+) -> str | None:
+    nodes = config["nodes"]
+
+    if requested:
+        if requested not in nodes:
+            raise ValueError(
+                f"Nodo di sniffing '{requested}' non trovato nel YAML. "
+                f"Nodi disponibili: {', '.join(nodes.keys())}"
+            )
+        return requested
+
+    wireshark = config.get("wireshark", {})
+    if isinstance(wireshark, dict) and wireshark.get("enabled") is False:
+        return None
+
+    if isinstance(wireshark, dict) and wireshark.get("sniff_node"):
+        node = str(wireshark["sniff_node"])
+        if node not in nodes:
+            raise ValueError(
+                f"wireshark.sniff_node '{node}' non trovato nel YAML. "
+                f"Nodi disponibili: {', '.join(nodes.keys())}"
+            )
+        return node
+
+    if wireshark_mode == "disabled":
+        return None
+
+    candidates = sniffable_nodes(config)
+
+    if not sys.stdin.isatty():
+        # In modalità non interattiva non facciamo domande.
+        # Per generare Wireshark usare --sniff-node oppure wireshark.sniff_node nel YAML.
+        return None
+
+    if wireshark_mode == "ask":
+        print("\nStrumentazione Wireshark")
+        if not ask_yes_no("Vuoi generare gli script automatici Wireshark per questo laboratorio?", default=False):
+            return None
+
+    print("\nNodi disponibili per lo sniffing Wireshark:")
+    for i, name in enumerate(candidates, start=1):
+        data = nodes[name]
+        interfaces = data.get("interfaces", [])
+        nets = ", ".join(
+            str(iface.get("network", f"eth{idx}"))
+            for idx, iface in enumerate(interfaces)
+        )
+        ip_list = ", ".join(
+            str(iface.get("ip"))
+            for iface in interfaces
+            if iface.get("ip")
+        )
+        extra = f" | IP: {ip_list}" if ip_list else ""
+        print(f"  {i}) {name}  [{node_type(data)}]  reti: {nets}{extra}")
+
+    print("  0) non generare script Wireshark")
+    choice = input("Scegli il dispositivo su cui fare sniffing: ").strip()
+
+    if choice in {"", "0"}:
+        return None
+
+    try:
+        index = int(choice)
+        if 1 <= index <= len(candidates):
+            return candidates[index - 1]
+    except ValueError:
+        pass
+
+    if choice in candidates:
+        return choice
+
+    raise ValueError(f"Scelta non valida: {choice}")
+
+def generate_start_wireshark_script(lab_name: str, sniff_node: str) -> str:
+    quoted_lab = bash_quote(lab_name)
+    quoted_node = bash_quote(sniff_node)
+    return f'''#!/bin/bash
+set -e
+
+IMAGE="lscr.io/linuxserver/wireshark:latest"
+LAB_NAME={quoted_lab}
+SNIFF_NODE={quoted_node}
+IFACE="${{1:-any}}"
+
+LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
+CAPTURE_DIR="$LAB_DIR/captures"
+CONFIG_DIR="$HOME/wireshark-config-$LAB_NAME"
+
+mkdir -p "$CAPTURE_DIR" "$CONFIG_DIR"
+chmod 777 "$CAPTURE_DIR" || true
+
+TARGET_CONTAINER=$(docker ps --format "{{{{.Names}}}}" | grep -E "^kathara_.*_${{SNIFF_NODE}}_" | head -n 1)
+
+if [ -z "$TARGET_CONTAINER" ]; then
+  echo "[ERRORE] Nessun container Kathara trovato per nodo: $SNIFF_NODE"
+  echo "[INFO] Container Kathara attivi:"
+  docker ps --format "{{{{.Names}}}}" | grep '^kathara_' || true
+  echo ""
+  echo "Avvia prima il lab dalla cartella:"
+  echo "  kathara lstart"
+  exit 1
+fi
+
+echo "[OK] Nodo sniffing: $SNIFF_NODE"
+echo "[OK] Container target: $TARGET_CONTAINER"
+echo "[OK] Interfaccia: $IFACE"
+echo "[OK] Cartella catture: $CAPTURE_DIR"
+
+docker rm -f "wireshark-sniffer-$LAB_NAME" "wireshark-gui-$LAB_NAME" 2>/dev/null || true
+
+docker pull "$IMAGE"
+
+docker run -d \
+  --name "wireshark-sniffer-$LAB_NAME" \
+  --net=container:"$TARGET_CONTAINER" \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
+  -e TZ=Europe/Rome \
+  -e IFACE="$IFACE" \
+  -e SNIFF_NODE="$SNIFF_NODE" \
+  -v "$CAPTURE_DIR:/captures" \
+  --restart unless-stopped \
+  --entrypoint /bin/bash \
+  "$IMAGE" \
+  -lc '
+    set -e
+    echo "[SNIFFER] Avviato nel namespace del nodo Kathara"
+    echo "[SNIFFER] Interfacce disponibili:"
+    ip link show
+
+    mkdir -p /captures
+    chmod 777 /captures || true
+
+    if ! touch /captures/test_write.tmp 2>/dev/null; then
+      echo "[ERRORE] /captures non è scrivibile."
+      ls -ld /captures || true
+      sleep infinity
+    fi
+    rm -f /captures/test_write.tmp
+
+    while true; do
+      chmod -R a+rwx /captures 2>/dev/null || true
+      sleep 2
+    done &
+
+    FILE="/captures/${{SNIFF_NODE}}_$(date +%Y%m%d_%H%M%S).pcapng"
+    echo "[SNIFFER] Cattura su interfaccia: $IFACE"
+    echo "[SNIFFER] File output: $FILE"
+
+    if command -v dumpcap >/dev/null 2>&1; then
+      exec dumpcap -p -i "$IFACE" -w "$FILE" -b filesize:10240 -b files:20
+    elif command -v tshark >/dev/null 2>&1; then
+      exec tshark -p -i "$IFACE" -w "$FILE" -b filesize:10240 -b files:20
+    else
+      echo "[ERRORE] Né dumpcap né tshark sono disponibili nell’immagine."
+      sleep infinity
+    fi
+  '
+
+docker run -d \
+  --name "wireshark-gui-$LAB_NAME" \
+  -p 3000:3000 \
+  -p 3001:3001 \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
+  -e PUID=0 \
+  -e PGID=0 \
+  -e TZ=Europe/Rome \
+  -v "$CONFIG_DIR:/config" \
+  -v "$CAPTURE_DIR:/captures" \
+  --shm-size="1gb" \
+  --restart unless-stopped \
+  "$IMAGE"
+
+echo ""
+echo "[OK] Wireshark automatico avviato."
+echo "Log sniffer:"
+echo "  ./sniff.sh"
+echo "  docker logs -f wireshark-sniffer-$LAB_NAME"
+echo "GUI Wireshark:"
+echo "  http://localhost:3000"
+echo "Catture host:"
+echo "  $CAPTURE_DIR"
+echo "Dentro Wireshark apri:"
+echo "  /captures"
+'''
+
+
+def generate_sniff_wireshark_script(lab_name: str) -> str:
+    quoted_lab = bash_quote(lab_name)
+    return f"""#!/bin/bash
+LAB_NAME={quoted_lab}
+CONTAINER="wireshark-sniffer-$LAB_NAME"
+
+if ! docker ps --format "{{{{.Names}}}}" | grep -qx "$CONTAINER"; then
+  echo "[ERRORE] Container sniffer non attivo: $CONTAINER"
+  echo "Avvia prima Wireshark con:"
+  echo "  ./start_wireshark.sh [any|eth0|eth1|...]"
+  echo ""
+  echo "Container Wireshark disponibili:"
+  docker ps --format "{{{{.Names}}}}" | grep '^wireshark-' || true
+  exit 1
+fi
+
+echo "[OK] Seguo i log dello sniffer: $CONTAINER"
+echo "[INFO] Premi CTRL+C per uscire dai log. Lo sniffing continuerà in background."
+echo ""
+exec docker logs -f "$CONTAINER"
+"""
+
+
+def generate_stop_wireshark_script(lab_name: str) -> str:
+    quoted_lab = bash_quote(lab_name)
+    return f'''#!/bin/bash
+LAB_NAME={quoted_lab}
+docker rm -f "wireshark-sniffer-$LAB_NAME" "wireshark-gui-$LAB_NAME" 2>/dev/null || true
+echo "[OK] Wireshark fermato per lab: $LAB_NAME"
+'''
+
+
+def write_wireshark_scripts(lab_dir: Path, lab_name: str, sniff_node: str | None) -> bool:
+    """
+    Genera gli script Wireshark se sniff_node è valorizzato.
+
+    Ritorna True se gli script sono stati generati, False altrimenti.
+    Se sniff_node è None, elimina eventuali script Wireshark residui da
+    generazioni precedenti, così la scelta "0" nel menu è effettiva.
+    """
+    start_path = lab_dir / "start_wireshark.sh"
+    stop_path = lab_dir / "stop_wireshark.sh"
+    sniff_path = lab_dir / "sniff.sh"
+
+    if not sniff_node:
+        for script_path in (start_path, stop_path, sniff_path):
+            if script_path.exists():
+                script_path.unlink()
+        return False
+
+    start_path.write_text(generate_start_wireshark_script(lab_name, sniff_node), encoding="utf-8")
+    stop_path.write_text(generate_stop_wireshark_script(lab_name), encoding="utf-8")
+    sniff_path.write_text(generate_sniff_wireshark_script(lab_name), encoding="utf-8")
+
+    os.chmod(start_path, 0o755)
+    os.chmod(stop_path, 0o755)
+    os.chmod(sniff_path, 0o755)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Generazione laboratorio
 # ---------------------------------------------------------------------------
 
-def generate_lab(config_path: Path, output_dir: Path, clean: bool, force: bool) -> Path:
+def generate_lab(
+    config_path: Path,
+    output_dir: Path,
+    clean: bool,
+    force: bool,
+    sniff_node: str | None,
+    wireshark_mode: str,
+) -> tuple[Path, str | None, bool]:
     config = load_yaml(config_path)
     validate_config(config)
 
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
+    selected_sniff_node = choose_sniff_node(config, sniff_node, wireshark_mode)
 
     lab_dir = output_dir / lab_name
     prepare_lab_directory(lab_dir, clean=clean, force=force)
@@ -461,7 +743,9 @@ def generate_lab(config_path: Path, output_dir: Path, clean: bool, force: bool) 
         if is_frr_device(node_data):
             write_frr_files(lab_dir, node_name, node_data)
 
-    return lab_dir
+    wireshark_generated = write_wireshark_scripts(lab_dir, lab_name, selected_sniff_node)
+
+    return lab_dir, selected_sniff_node, wireshark_generated
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +789,24 @@ def parse_args() -> argparse.Namespace:
         help="Sovrascrive i file se la cartella del laboratorio esiste già.",
     )
 
+
+    parser.add_argument(
+        "--sniff-node",
+        default=None,
+        help="Nodo Kathara su cui generare lo sniffing Wireshark automatico, ad esempio r1, r2, router.",
+    )
+
+    parser.add_argument(
+        "--wireshark",
+        choices=["ask", "enabled", "disabled"],
+        default="ask",
+        help=(
+            "Modalità generazione script Wireshark: "
+            "ask chiede a terminale, enabled salta la prima domanda e chiede solo il nodo, "
+            "disabled non genera script. Default: ask."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -513,11 +815,13 @@ def main() -> int:
 
     try:
         config_path = resolve_config_path(args.lab, args.config_dir)
-        lab_dir = generate_lab(
+        lab_dir, selected_sniff_node, wireshark_generated = generate_lab(
             config_path=config_path,
             output_dir=args.output_dir,
             clean=args.clean,
             force=args.force,
+            sniff_node=args.sniff_node,
+            wireshark_mode=args.wireshark
         )
 
         print(f"[OK] Configurazione letta: {config_path}")
@@ -526,9 +830,20 @@ def main() -> int:
         print("Per avviare:")
         print(f"  cd {lab_dir}")
         print("  kathara lstart")
+        print(" Oppure:")
+        print(f"  ./start.sh {lab_dir}")
         print("")
         print("Per pulire:")
         print("  kathara lclean")
+        print("")
+
+        if wireshark_generated:
+            print(f"Script Wireshark generati per il nodo: {selected_sniff_node}")
+            print("  ./start_wireshark.sh [any|eth0|eth1|...]")
+            print("  ./sniff.sh")
+            print("  ./stop_wireshark.sh")
+        else:
+            print("Script Wireshark non generati.")
 
         return 0
 
