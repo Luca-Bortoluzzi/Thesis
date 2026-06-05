@@ -1,0 +1,10 @@
+=================================
+ Benvenuto nel servizio Test1
+=================================
+
+1) Ping
+2) Info server
+3) Esci
+
+Scelta: 
+pong
