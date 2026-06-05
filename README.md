@@ -19,10 +19,8 @@ The project structure is organized around the following main elements:
 ```text
 Thesis/
 ├── configs/
-│   ├── Test1.yml
-│   ├── client-router-server.yml
-│   ├── multi-LANs.yml
-│   └── multi_AS.yml
+│   ├── <namelab>.yml
+│   
 ├── generate_lab.py
 ├── start.sh
 ├── stop.sh
@@ -32,6 +30,7 @@ Thesis/
 ├── run_connection_tests.py
 ├── show_connection_results.py
 └── labs/
+    ├── <directory_labs_for_Katharà>
 ```
 
 The `configs/` folder contains the network topology descriptions. Each YAML file represents a different lab, with nodes, interfaces, IP addresses, gateways, routing protocols, and lab metadata.
@@ -44,58 +43,8 @@ The `run_connection_tests.py` and `show_connection_results.py` scripts are indep
 
 ---
 
-## 3. Main Topology: Test1 Lab
+## 3. Main Topology: Labs .yml
 
-The main lab is defined in the file:
-
-```text
-configs/Test1.yml
-```
-
-The topology places a server in a DMZ network, with multiple clients distributed across different LANs. Routers are interconnected via point-to-point networks and use OSPF to propagate routes.
-
-Simplified logical diagram:
-
-```text
-pc_a ─ lan_a ─ r1
-                 \
-pc_b ─ lan_b ─ r2 \
-                   r3 ─ r5 ─ dmz ─ server
-pc_c ─ lan_c ─ r3 /
-                 /
-pc_d ─ lan_d ─ r4
-```
-
-The server address is:
-
-```text
-10.0.20.10/24
-```
-
-The DMZ gateway is:
-
-```text
-10.0.20.1
-```
-
-The application service is exposed on port:
-
-```text
-9000/TCP
-```
-
-The main clients are:
-
-```text
-pc_a
-pc_b
-pc_c
-pc_d
-```
-
-The network is structured so that clients are not directly connected to the server, but must reach it through the routing system. This allows verification of not only service reachability, but also the correct configuration of the emulated network.
-
----
 
 ## 4. How `generate_lab.py` Works
 
@@ -104,13 +53,13 @@ The `generate_lab.py` script is the central component for automated lab generati
 Its purpose is to read a YAML file and produce a folder compatible with Kathara. The general command is:
 
 ```bash
-python3 generate_lab.py configs/Test1.yml --clean
+python3 generate_lab.py configs/<name_file_lab>.yml --clean or ./generate_lab.py configs/<name_file_lab>.yml
 ```
 
 Or, by specifying only the lab name if the file is inside `configs/`:
 
 ```bash
-python3 generate_lab.py Test1 --clean
+python3 generate_lab.py <name_file_lab> --clean or ./generate_lab.py <name_file_lab> --clean
 ```
 
 The script performs the following operations:
@@ -600,7 +549,7 @@ pip install pyyaml
 From the main project directory:
 
 ```bash
-python3 generate_lab.py configs/Test1.yml --clean
+python3 generate_lab.py configs/Test1.yml --clean or ./generate_lab.py configs/Test1.yml --clean 
 ```
 
 The `--clean` flag deletes any previous generation of the same lab and recreates the folder from scratch.
@@ -635,16 +584,10 @@ Alternatively, from the project root:
 
 The Python service must be running on the server node.
 
-Connect to the server container:
+Start the service in the server by terminal:
 
 ```bash
-kathara connect server
-```
-
-Start the service:
-
-```bash
-python3 /server/service.py
+python3 service.py
 ```
 
 If the file is located at a different path inside the lab, adjust the command accordingly. What matters is that the service is listening on the configured port, for example:
@@ -656,7 +599,6 @@ If the file is located at a different path inside the lab, adjust the command ac
 To verify manually from a client:
 
 ```bash
-kathara connect pc_a
 printf "1\n" | nc 10.0.20.10 9000
 ```
 
