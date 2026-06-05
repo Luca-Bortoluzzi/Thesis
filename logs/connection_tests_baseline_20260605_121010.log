@@ -1,0 +1,59 @@
+[INFO] Lab dir: /home/luke/Documenti/Thesis
+[INFO] Scenario: baseline
+[INFO] Target: 10.0.20.10:9000
+[INFO] Client: pc_a pc_b pc_c pc_d
+[INFO] Tentativi per client: 10
+[INFO] Timeout: 1s
+[INFO] Delay: 1.0s
+[INFO] Output CSV: /home/luke/Documenti/Thesis/results/connection_results_baseline_20260605_121010.csv
+[INFO] Risposte complete: /home/luke/Documenti/Thesis/results/responses_baseline_20260605_121010
+
+[OK] Nodo pc_a -> container kathara_luke-ruyxex5uc4qjndb0lle9q_pc_a_8vR0uwt29JHsNXyfiSwNEQ
+[pc_a][1/10] OK,45.05,,results/responses_baseline_20260605_121010/pc_a_attempt_1.txt
+[pc_a][2/10] OK,51.29,,results/responses_baseline_20260605_121010/pc_a_attempt_2.txt
+[pc_a][3/10] OK,49.56,,results/responses_baseline_20260605_121010/pc_a_attempt_3.txt
+[pc_a][4/10] OK,56.54,,results/responses_baseline_20260605_121010/pc_a_attempt_4.txt
+[pc_a][5/10] OK,49.21,,results/responses_baseline_20260605_121010/pc_a_attempt_5.txt
+[pc_a][6/10] OK,54.09,,results/responses_baseline_20260605_121010/pc_a_attempt_6.txt
+[pc_a][7/10] OK,47.96,,results/responses_baseline_20260605_121010/pc_a_attempt_7.txt
+[pc_a][8/10] OK,54.46,,results/responses_baseline_20260605_121010/pc_a_attempt_8.txt
+[pc_a][9/10] OK,54.52,,results/responses_baseline_20260605_121010/pc_a_attempt_9.txt
+[pc_a][10/10] OK,56.29,,results/responses_baseline_20260605_121010/pc_a_attempt_10.txt
+[OK] Nodo pc_b -> container kathara_luke-ruyxex5uc4qjndb0lle9q_pc_b_8vR0uwt29JHsNXyfiSwNEQ
+[pc_b][1/10] OK,50.86,,results/responses_baseline_20260605_121010/pc_b_attempt_1.txt
+[pc_b][2/10] OK,62.95,,results/responses_baseline_20260605_121010/pc_b_attempt_2.txt
+[pc_b][3/10] OK,61.37,,results/responses_baseline_20260605_121010/pc_b_attempt_3.txt
+[pc_b][4/10] OK,60.76,,results/responses_baseline_20260605_121010/pc_b_attempt_4.txt
+[pc_b][5/10] OK,49.68,,results/responses_baseline_20260605_121010/pc_b_attempt_5.txt
+[pc_b][6/10] OK,58.94,,results/responses_baseline_20260605_121010/pc_b_attempt_6.txt
+[pc_b][7/10] OK,55.76,,results/responses_baseline_20260605_121010/pc_b_attempt_7.txt
+[pc_b][8/10] OK,55.31,,results/responses_baseline_20260605_121010/pc_b_attempt_8.txt
+[pc_b][9/10] OK,54.49,,results/responses_baseline_20260605_121010/pc_b_attempt_9.txt
+[pc_b][10/10] OK,59.95,,results/responses_baseline_20260605_121010/pc_b_attempt_10.txt
+[OK] Nodo pc_c -> container kathara_luke-ruyxex5uc4qjndb0lle9q_pc_c_8vR0uwt29JHsNXyfiSwNEQ
+[pc_c][1/10] OK,51.04,,results/responses_baseline_20260605_121010/pc_c_attempt_1.txt
+[pc_c][2/10] OK,57.05,,results/responses_baseline_20260605_121010/pc_c_attempt_2.txt
+[pc_c][3/10] OK,56.00,,results/responses_baseline_20260605_121010/pc_c_attempt_3.txt
+[pc_c][4/10] OK,57.75,,results/responses_baseline_20260605_121010/pc_c_attempt_4.txt
+[pc_c][5/10] OK,47.76,,results/responses_baseline_20260605_121010/pc_c_attempt_5.txt
+[pc_c][6/10] OK,55.61,,results/responses_baseline_20260605_121010/pc_c_attempt_6.txt
+[pc_c][7/10] OK,56.96,,results/responses_baseline_20260605_121010/pc_c_attempt_7.txt
+[pc_c][8/10] OK,59.52,,results/responses_baseline_20260605_121010/pc_c_attempt_8.txt
+[pc_c][9/10] OK,57.47,,results/responses_baseline_20260605_121010/pc_c_attempt_9.txt
+[pc_c][10/10] OK,48.49,,results/responses_baseline_20260605_121010/pc_c_attempt_10.txt
+[OK] Nodo pc_d -> container kathara_luke-ruyxex5uc4qjndb0lle9q_pc_d_8vR0uwt29JHsNXyfiSwNEQ
+[pc_d][1/10] OK,47.36,,results/responses_baseline_20260605_121010/pc_d_attempt_1.txt
+[pc_d][2/10] OK,53.84,,results/responses_baseline_20260605_121010/pc_d_attempt_2.txt
+[pc_d][3/10] OK,56.04,,results/responses_baseline_20260605_121010/pc_d_attempt_3.txt
+[pc_d][4/10] OK,56.52,,results/responses_baseline_20260605_121010/pc_d_attempt_4.txt
+[pc_d][5/10] OK,48.99,,results/responses_baseline_20260605_121010/pc_d_attempt_5.txt
+[pc_d][6/10] OK,50.88,,results/responses_baseline_20260605_121010/pc_d_attempt_6.txt
+[pc_d][7/10] OK,57.26,,results/responses_baseline_20260605_121010/pc_d_attempt_7.txt
+[pc_d][8/10] OK,50.77,,results/responses_baseline_20260605_121010/pc_d_attempt_8.txt
+[pc_d][9/10] OK,58.05,,results/responses_baseline_20260605_121010/pc_d_attempt_9.txt
+[pc_d][10/10] OK,58.00,,results/responses_baseline_20260605_121010/pc_d_attempt_10.txt
+
+[OK] Test terminati.
+[OK] CSV: /home/luke/Documenti/Thesis/results/connection_results_baseline_20260605_121010.csv
+[OK] Log principale: /home/luke/Documenti/Thesis/logs/connection_tests_baseline_20260605_121010.log
+[OK] Risposte complete: /home/luke/Documenti/Thesis/results/responses_baseline_20260605_121010

@@ -14,6 +14,7 @@ LAB_PATH="$1"
 # Check if the directory exists before running the command
 if [ -d "$LAB_PATH" ]; then
     echo "Stopping and cleaning up Kathara environment: $ENV_NAME..."
+    "./$LAB_PATH/stop_wireshark.sh"
     cd "$LAB_PATH" && kathara lclean
 else
     echo "Error: The directory '$LAB_PATH' does not exist."

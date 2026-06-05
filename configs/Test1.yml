@@ -127,3 +127,13 @@ nodes:
       protocol: ospf
       router_id: 5.5.5.5
       area: 0
+
+connection_tests:
+  enabled: true
+  scenario: baseline
+  clients: [pc_a, pc_b, pc_c]
+  target_node: server
+  port: 9000
+  attempts: 10
+  timeout: 2
+  delay: 1
