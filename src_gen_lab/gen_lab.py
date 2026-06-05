@@ -1,28 +1,5 @@
 #!/usr/bin/env python3
-"""
-generate_lab.py
-
-Generatore minimale di laboratori Kathara a partire da file YAML.
-
-Output:
-- lab.conf nel formato Kathara classico;
-- <device>.startup per ogni dispositivo;
-- per router/switch/firewall:
-    <device>/etc/frr/daemons
-    <device>/etc/frr/frr.conf
-    <device>/etc/frr/vtysh.conf
-
-Formato .startup dei router/switch/firewall:
-    ip address add 172.16.1.1/24 dev eth0
-    ip route add default via 172.16.1.2
-    systemctl start frr
-
-Uso:
-    python3 generate_lab.py configs/file.yml oppure ./generate_lab.py configs/file.yml
-
-Dipendenza:
-    pip install pyyaml
-"""
+"""Generatore di laboratori Kathara a partire da configurazioni YAML."""
 
 import argparse
 import ipaddress
@@ -32,12 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:
-    print("Errore: PyYAML non installato. Esegui: pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
-
+from src_gen_lab.Lexer import load_yaml
+from src_gen_lab.Parser import validate_config, parse_yaml_configuration
 
 FRR_DEVICE_TYPES = {"router", "switch", "firewall"}
 BASE_IMAGE = "kathara/base"
@@ -45,65 +18,8 @@ FRR_IMAGE = "kathara/frr"
 
 
 # ---------------------------------------------------------------------------
-# Lettura e validazione YAML
+# Validazione e caricamento
 # ---------------------------------------------------------------------------
-
-def load_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"File YAML non trovato: {path}")
-
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Il file {path} non contiene una configurazione YAML valida.")
-
-    return data
-
-
-def resolve_config_path(argument: str, config_dir: Path) -> Path:
-    candidate = Path(argument)
-
-    if candidate.exists():
-        return candidate
-
-    for extension in (".yml", ".yaml"):
-        possible = config_dir / f"{argument}{extension}"
-        if possible.exists():
-            return possible
-
-    raise FileNotFoundError(
-        f"Configurazione non trovata per '{argument}'. "
-        f"Passa un file YAML valido oppure metti {argument}.yml in {config_dir}"
-    )
-
-
-def validate_config(config: dict[str, Any]) -> None:
-    if "lab_name" not in config:
-        raise ValueError("Campo obbligatorio mancante: lab_name")
-
-    if "nodes" not in config:
-        raise ValueError("Campo obbligatorio mancante: nodes")
-
-    if not isinstance(config["nodes"], dict) or not config["nodes"]:
-        raise ValueError("Il campo nodes deve essere un dizionario non vuoto.")
-
-    for node_name, node_data in config["nodes"].items():
-        if not isinstance(node_data, dict):
-            raise ValueError(f"Il nodo {node_name} deve essere un dizionario.")
-
-        interfaces = node_data.get("interfaces")
-        if not isinstance(interfaces, list) or not interfaces:
-            raise ValueError(f"Il nodo {node_name} deve avere almeno una interfaccia.")
-
-        for index, interface in enumerate(interfaces):
-            if not isinstance(interface, dict):
-                raise ValueError(f"Il nodo {node_name}, interfaccia {index}, non è valida.")
-
-            if "network" not in interface:
-                raise ValueError(
-                    f"Il nodo {node_name}, interfaccia {index}, non ha il campo network."
-                )
 
 
 def prepare_lab_directory(lab_dir: Path, clean: bool, force: bool) -> None:
@@ -122,6 +38,7 @@ def prepare_lab_directory(lab_dir: Path, clean: bool, force: bool) -> None:
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
 
 def node_type(node_data: dict[str, Any]) -> str:
     return str(node_data.get("type", "host")).lower()
@@ -186,7 +103,7 @@ def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
         if daemons.get("bgpd"):
             protocols.append("bgp")
 
-    result = []
+    result: list[str] = []
     for proto in protocols:
         if proto not in result:
             result.append(proto)
@@ -197,6 +114,7 @@ def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 # lab.conf
 # ---------------------------------------------------------------------------
+
 
 def generate_lab_conf(config: dict[str, Any]) -> str:
     lab_name = config["lab_name"]
@@ -233,6 +151,7 @@ def generate_lab_conf(config: dict[str, Any]) -> str:
 # FRR
 # ---------------------------------------------------------------------------
 
+
 def get_frr_networks(node_data: dict[str, Any]) -> list[str]:
     frr = get_frr_section(node_data)
     networks = frr.get("networks")
@@ -240,7 +159,7 @@ def get_frr_networks(node_data: dict[str, Any]) -> list[str]:
     if networks:
         return [str(network) for network in networks]
 
-    result = []
+    result: list[str] = []
     for interface in node_data["interfaces"]:
         ip_addr = interface.get("ip")
         if ip_addr:
@@ -343,15 +262,9 @@ def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
         if frr.get("router_id"):
             lines.append(f" bgp router-id {frr['router_id']}")
 
-        # FRR, nelle versioni recenti, richiede policy esplicite per eBGP.
-        # Nei laboratori didattici abilitiamo automaticamente l'annuncio/ricezione
-        # senza policy, altrimenti i neighbor possono stabilirsi ma le rotte non
-        # vengono accettate o propagate.
         if frr.get("ebgp_requires_policy", False) is False:
             lines.append(" no bgp ebgp-requires-policy")
 
-        # Permette di annunciare le reti indicate in frr.networks senza blocchi
-        # dovuti al controllo di import/check sul network statement.
         if frr.get("network_import_check", False) is False:
             lines.append(" no bgp network import-check")
 
@@ -388,46 +301,30 @@ def write_frr_files(lab_dir: Path, node_name: str, node_data: dict[str, Any]) ->
 # Startup Kathara nel formato richiesto
 # ---------------------------------------------------------------------------
 
+
 def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
-    """
-    Genera un file .startup con il formato richiesto:
-
-        ip address add 172.16.1.1/24 dev eth0
-
-        ip route add default via 172.16.1.2
-
-        systemctl start frr
-
-    Non vengono generati script bash.
-    """
     lines: list[str] = []
 
-    # Indirizzi IP sulle interfacce.
     for index, interface in enumerate(node_data["interfaces"]):
         ip_addr = interface.get("ip")
         if ip_addr:
             lines.append(f"ip address add {ip_addr} dev eth{index}")
 
-    # Riga vuota tra indirizzi e routing, se serve.
     if lines and (node_data.get("default_gateway") or node_data.get("routes") or is_frr_device(node_data)):
         lines.append("")
 
-    # Default gateway.
     if node_data.get("default_gateway"):
         lines.append(f"ip route add default via {node_data['default_gateway']}")
 
-    # Rotte statiche opzionali.
     if node_data.get("routes"):
         for route in node_data["routes"]:
             lines.append(f"ip route add {route['to']} via {route['via']}")
 
-    # Riga vuota tra routing e avvio FRR.
     if is_frr_device(node_data):
         if lines and lines[-1] != "":
             lines.append("")
         lines.append("systemctl start frr")
 
-    # Comandi custom opzionali.
     if node_data.get("commands"):
         if lines and lines[-1] != "":
             lines.append("")
@@ -436,10 +333,6 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
 
     return "\n".join(lines).rstrip() + "\n"
 
-
-# ---------------------------------------------------------------------------
-# Wireshark automatico per lab Kathara
-# ---------------------------------------------------------------------------
 
 def bash_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
@@ -493,8 +386,6 @@ def choose_sniff_node(
     candidates = sniffable_nodes(config)
 
     if not sys.stdin.isatty():
-        # In modalità non interattiva non facciamo domande.
-        # Per generare Wireshark usare --sniff-node oppure wireshark.sniff_node nel YAML.
         return None
 
     if wireshark_mode == "ask":
@@ -535,6 +426,7 @@ def choose_sniff_node(
         return choice
 
     raise ValueError(f"Scelta non valida: {choice}")
+
 
 def generate_start_wireshark_script(lab_name: str, sniff_node: str) -> str:
     quoted_lab = bash_quote(lab_name)
@@ -655,7 +547,7 @@ def generate_sniff_wireshark_script(lab_name: str) -> str:
     quoted_lab = bash_quote(lab_name)
     return f"""#!/bin/bash
 LAB_NAME={quoted_lab}
-CONTAINER="wireshark-sniffer-$LAB_NAME"
+CONTAINER=\"wireshark-sniffer-$LAB_NAME\"
 
 if ! docker ps --format "{{{{.Names}}}}" | grep -qx "$CONTAINER"; then
   echo "[ERRORE] Container sniffer non attivo: $CONTAINER"
@@ -684,13 +576,6 @@ echo "[OK] Wireshark fermato per lab: $LAB_NAME"
 
 
 def write_wireshark_scripts(lab_dir: Path, lab_name: str, sniff_node: str | None) -> bool:
-    """
-    Genera gli script Wireshark se sniff_node è valorizzato.
-
-    Ritorna True se gli script sono stati generati, False altrimenti.
-    Se sniff_node è None, elimina eventuali script Wireshark residui da
-    generazioni precedenti, così la scelta "0" nel menu è effettiva.
-    """
     start_path = lab_dir / "start_wireshark.sh"
     stop_path = lab_dir / "stop_wireshark.sh"
     sniff_path = lab_dir / "sniff.sh"
@@ -710,10 +595,6 @@ def write_wireshark_scripts(lab_dir: Path, lab_name: str, sniff_node: str | None
     os.chmod(sniff_path, 0o755)
     return True
 
-
-# ---------------------------------------------------------------------------
-# Generazione laboratorio
-# ---------------------------------------------------------------------------
 
 def generate_lab(
     config_path: Path,
@@ -747,10 +628,6 @@ def generate_lab(
 
     return lab_dir, selected_sniff_node, wireshark_generated
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -789,7 +666,6 @@ def parse_args() -> argparse.Namespace:
         help="Sovrascrive i file se la cartella del laboratorio esiste già.",
     )
 
-
     parser.add_argument(
         "--sniff-node",
         default=None,
@@ -814,14 +690,14 @@ def main() -> int:
     args = parse_args()
 
     try:
-        config_path = resolve_config_path(args.lab, args.config_dir)
+        config_path, _ = parse_yaml_configuration(args.lab, args.config_dir)
         lab_dir, selected_sniff_node, wireshark_generated = generate_lab(
             config_path=config_path,
             output_dir=args.output_dir,
             clean=args.clean,
             force=args.force,
             sniff_node=args.sniff_node,
-            wireshark_mode=args.wireshark
+            wireshark_mode=args.wireshark,
         )
 
         print(f"[OK] Configurazione letta: {config_path}")

@@ -1,4 +1,5 @@
-./labs/
+labs/
 *.zip
 logs/*
 results/*
+src_gen_lab/pycache/
