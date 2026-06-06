@@ -1,0 +1,366 @@
+lab_name: Test_enterprise_multi_as_import_dirs
+description: Ambiente realistico multi-AS; server trattato come host, senza services
+  YAML
+metadata:
+  description: Enterprise-style topology with OSPF stub areas, RIP domains and inter-AS
+    BGP
+  version: 2.0
+  author: Luca-Bortoluzzi
+  email: luca.bortoluzzi921@edu.unito.it
+  web: http://www.kathara.org/
+nodes:
+  pc_a:
+    type: host
+    interfaces:
+    - network: as65010_lan_a
+      ip: 10.10.10.10/24
+    default_gateway: 10.10.10.1
+  pc_b:
+    type: host
+    interfaces:
+    - network: as65010_lan_b
+      ip: 10.10.20.10/24
+    default_gateway: 10.10.20.1
+  pc_c:
+    type: host
+    interfaces:
+    - network: as65020_lan_c
+      ip: 10.20.10.10/24
+    default_gateway: 10.20.10.1
+  pc_d:
+    type: host
+    interfaces:
+    - network: as65020_lan_d
+      ip: 10.20.20.10/24
+    default_gateway: 10.20.20.1
+  pc_e:
+    type: host
+    interfaces:
+    - network: as65030_lan_e
+      ip: 10.30.10.10/24
+    default_gateway: 10.30.10.1
+  pc_f:
+    type: host
+    interfaces:
+    - network: as65030_lan_f
+      ip: 10.30.20.10/24
+    default_gateway: 10.30.20.1
+  server:
+    type: host
+    interfaces:
+    - network: as65040_dmz
+      ip: 10.40.10.10/24
+    default_gateway: 10.40.10.1
+  r10_core1:
+    type: router
+    interfaces:
+    - network: r10_core1_core2
+      ip: 10.255.10.1/30
+      ospf_area: 0
+    - network: r10_core1_abr1
+      ip: 10.255.10.5/30
+      ospf_area: 0
+    - network: r10_core1_border
+      ip: 10.255.10.9/30
+      ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 10.10.10.1
+  r10_core2:
+    type: router
+    interfaces:
+    - network: r10_core1_core2
+      ip: 10.255.10.2/30
+      ospf_area: 0
+    - network: r10_core2_abr1
+      ip: 10.255.10.13/30
+      ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 10.10.10.2
+  r10_abr1:
+    type: router
+    interfaces:
+    - network: r10_core1_abr1
+      ip: 10.255.10.6/30
+      ospf_area: 0
+    - network: r10_core2_abr1
+      ip: 10.255.10.14/30
+      ospf_area: 0
+    - network: as65010_lan_a
+      ip: 10.10.10.1/24
+      ospf_area: 10
+    - network: as65010_lan_b
+      ip: 10.10.20.1/24
+      ospf_area: 10
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 10.10.10.3
+      ospf:
+        areas:
+        - id: 10
+          type: stub
+  r10_border:
+    type: router
+    interfaces:
+    - network: r10_core1_border
+      ip: 10.255.10.10/30
+      ospf_area: 0
+    - network: bgp_10_20
+      ip: 172.16.10.1/30
+    - network: bgp_10_30
+      ip: 172.16.13.1/30
+    frr:
+      enabled: true
+      protocols:
+      - ospf
+      - bgp
+      router_id: 10.10.10.254
+      ospf:
+        redistribute:
+        - bgp
+      bgp:
+        asn: 65010
+        neighbors:
+        - ip: 172.16.10.2
+          remote_as: 65020
+        - ip: 172.16.13.2
+          remote_as: 65030
+        redistribute:
+        - ospf
+        ebgp_requires_policy: false
+        network_import_check: false
+  r20_core1:
+    type: router
+    interfaces:
+    - network: r20_core1_core2
+      ip: 10.255.20.1/30
+      ospf_area: 0
+    - network: r20_core1_abr1
+      ip: 10.255.20.5/30
+      ospf_area: 0
+    - network: r20_core1_border
+      ip: 10.255.20.9/30
+      ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 20.20.20.1
+  r20_core2:
+    type: router
+    interfaces:
+    - network: r20_core1_core2
+      ip: 10.255.20.2/30
+      ospf_area: 0
+    - network: r20_core2_abr1
+      ip: 10.255.20.13/30
+      ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 20.20.20.2
+  r20_abr1:
+    type: router
+    interfaces:
+    - network: r20_core1_abr1
+      ip: 10.255.20.6/30
+      ospf_area: 0
+    - network: r20_core2_abr1
+      ip: 10.255.20.14/30
+      ospf_area: 0
+    - network: as65020_lan_c
+      ip: 10.20.10.1/24
+      ospf_area: 20
+    - network: as65020_lan_d
+      ip: 10.20.20.1/24
+      ospf_area: 20
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 20.20.20.3
+      ospf:
+        areas:
+        - id: 20
+          type: stub
+  r20_border:
+    type: router
+    interfaces:
+    - network: r20_core1_border
+      ip: 10.255.20.10/30
+      ospf_area: 0
+    - network: bgp_10_20
+      ip: 172.16.10.2/30
+    - network: bgp_20_30
+      ip: 172.16.23.1/30
+    - network: bgp_20_40
+      ip: 172.16.24.1/30
+    frr:
+      enabled: true
+      protocols:
+      - ospf
+      - bgp
+      router_id: 20.20.20.254
+      ospf:
+        redistribute:
+        - bgp
+      bgp:
+        asn: 65020
+        neighbors:
+        - ip: 172.16.10.1
+          remote_as: 65010
+        - ip: 172.16.23.2
+          remote_as: 65030
+        - ip: 172.16.24.2
+          remote_as: 65040
+        redistribute:
+        - ospf
+        ebgp_requires_policy: false
+        network_import_check: false
+  r30_rip1:
+    type: router
+    interfaces:
+    - network: as65030_lan_e
+      ip: 10.30.10.1/24
+      rip: true
+    - network: r30_rip1_rip2
+      ip: 10.255.30.1/30
+      rip: true
+    - network: r30_rip1_border1
+      ip: 10.255.30.5/30
+      rip: true
+    frr:
+      enabled: true
+      protocol: rip
+      router_id: 30.30.30.1
+      rip:
+        version: 2
+  r30_rip2:
+    type: router
+    interfaces:
+    - network: as65030_lan_f
+      ip: 10.30.20.1/24
+      rip: true
+    - network: r30_rip1_rip2
+      ip: 10.255.30.2/30
+      rip: true
+    - network: r30_rip2_border2
+      ip: 10.255.30.9/30
+      rip: true
+    frr:
+      enabled: true
+      protocol: rip
+      router_id: 30.30.30.2
+      rip:
+        version: 2
+  r30_border1:
+    type: router
+    interfaces:
+    - network: r30_rip1_border1
+      ip: 10.255.30.6/30
+      rip: true
+    - network: bgp_10_30
+      ip: 172.16.13.2/30
+    frr:
+      enabled: true
+      protocols:
+      - rip
+      - bgp
+      router_id: 30.30.30.254
+      rip:
+        version: 2
+        redistribute:
+        - bgp
+      bgp:
+        asn: 65030
+        neighbors:
+        - ip: 172.16.13.1
+          remote_as: 65010
+        redistribute:
+        - rip
+        ebgp_requires_policy: false
+        network_import_check: false
+  r30_border2:
+    type: router
+    interfaces:
+    - network: r30_rip2_border2
+      ip: 10.255.30.10/30
+      rip: true
+    - network: bgp_20_30
+      ip: 172.16.23.2/30
+    frr:
+      enabled: true
+      protocols:
+      - rip
+      - bgp
+      router_id: 30.30.30.253
+      rip:
+        version: 2
+        redistribute:
+        - bgp
+      bgp:
+        asn: 65030
+        neighbors:
+        - ip: 172.16.23.1
+          remote_as: 65020
+        redistribute:
+        - rip
+        ebgp_requires_policy: false
+        network_import_check: false
+  r40_core:
+    type: router
+    interfaces:
+    - network: as65040_dmz
+      ip: 10.40.10.1/24
+      ospf_area: 0
+    - network: r40_core_border
+      ip: 10.255.40.1/30
+      ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 40.40.40.1
+  r40_border:
+    type: router
+    interfaces:
+    - network: r40_core_border
+      ip: 10.255.40.2/30
+      ospf_area: 0
+    - network: bgp_20_40
+      ip: 172.16.24.2/30
+    frr:
+      enabled: true
+      protocols:
+      - ospf
+      - bgp
+      router_id: 40.40.40.254
+      ospf:
+        redistribute:
+        - bgp
+      bgp:
+        asn: 65040
+        neighbors:
+        - ip: 172.16.24.1
+          remote_as: 65020
+        redistribute:
+        - ospf
+        ebgp_requires_policy: false
+        network_import_check: false
+connection_tests:
+  enabled: true
+  scenario: realistic_multi_as_structured
+  clients:
+  - pc_a
+  - pc_b
+  - pc_c
+  - pc_d
+  - pc_e
+  - pc_f
+  target_node: server
+  target_ip: 10.40.10.10
+  port: 9000
+  attempts: 10
+  timeout: 2
+  delay: 1

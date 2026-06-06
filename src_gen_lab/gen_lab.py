@@ -84,15 +84,33 @@ def get_frr_section(node_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
+    """Restituisce i protocolli FRR richiesti dal nodo.
+
+    Retrocompatibilita':
+    - frr.protocol: ospf|rip|bgp
+    - frr.protocols: [ospf, bgp] oppure {ospf: {...}, bgp: {...}}
+    - frr.daemons: {ospfd: true, ripd: true, bgpd: true}
+    """
     frr = get_frr_section(node_data)
     protocols: list[str] = []
 
     if "protocol" in frr:
         protocols.append(str(frr["protocol"]).lower())
 
-    if "protocols" in frr:
-        for proto in frr["protocols"]:
+    raw_protocols = frr.get("protocols")
+    if isinstance(raw_protocols, list):
+        for proto in raw_protocols:
             protocols.append(str(proto).lower())
+    elif isinstance(raw_protocols, dict):
+        for proto, proto_data in raw_protocols.items():
+            if isinstance(proto_data, dict) and proto_data.get("enabled", True) is False:
+                continue
+            protocols.append(str(proto).lower())
+
+    for proto in ("ospf", "rip", "bgp"):
+        proto_data = frr.get(proto)
+        if isinstance(proto_data, dict) and proto_data.get("enabled", True) is not False:
+            protocols.append(proto)
 
     daemons = frr.get("daemons", {})
     if isinstance(daemons, dict):
@@ -109,6 +127,86 @@ def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
             result.append(proto)
 
     return result
+
+
+def get_protocol_section(frr: dict[str, Any], protocol: str) -> dict[str, Any]:
+    """Legge la configurazione specifica di protocollo, supportando piu' forme YAML."""
+    section: dict[str, Any] = {}
+
+    raw_protocols = frr.get("protocols")
+    if isinstance(raw_protocols, dict) and isinstance(raw_protocols.get(protocol), dict):
+        section.update(raw_protocols[protocol])
+
+    raw_direct = frr.get(protocol)
+    if isinstance(raw_direct, dict):
+        section.update(raw_direct)
+
+    return section
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
+
+
+def interface_networks_by_marker(
+    node_data: dict[str, Any],
+    marker: str,
+    marker_value: Any | None = None,
+) -> list[str]:
+    networks: list[str] = []
+
+    for interface in node_data["interfaces"]:
+        if marker not in interface:
+            continue
+        if marker_value is not None and interface.get(marker) != marker_value:
+            continue
+
+        ip_addr = interface.get("ip")
+        if ip_addr:
+            networks.append(get_network_from_ip(ip_addr))
+
+    return unique_preserve_order(networks)
+
+
+def get_ospf_network_area_pairs(node_data: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Reti OSPF: usa interface.ospf_area; in assenza, fallback legacy frr.area."""
+    result: list[tuple[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for interface in node_data["interfaces"]:
+        if "ospf_area" not in interface:
+            continue
+        ip_addr = interface.get("ip")
+        if not ip_addr:
+            continue
+        network = get_network_from_ip(ip_addr)
+        area = interface["ospf_area"]
+        key = (network, str(area))
+        if key not in seen:
+            result.append((network, area))
+            seen.add(key)
+
+    if result:
+        return result
+
+    frr = get_frr_section(node_data)
+    area = frr.get("area", 0)
+    return [(network, area) for network in get_frr_networks(node_data)]
+
+
+def get_rip_networks(node_data: dict[str, Any]) -> list[str]:
+    """Reti RIP: usa interface.rip: true; in assenza, fallback legacy su tutte le interfacce."""
+    marked = interface_networks_by_marker(node_data, "rip", True)
+    return marked if marked else get_frr_networks(node_data)
+
+
+def add_redistribute_lines(lines: list[str], section: dict[str, Any]) -> None:
+    for proto in section.get("redistribute", []):
+        lines.append(f" redistribute {proto}")
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +314,7 @@ def generate_minimal_frr_conf(node_name: str) -> str:
 def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
     frr = get_frr_section(node_data)
 
+    # Escape hatch: se serve, si puo' ancora scrivere frr.config a mano.
     if "config" in frr:
         return str(frr["config"]).rstrip() + "\n"
 
@@ -230,50 +329,77 @@ def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
         "!",
     ]
 
+    common_router_id = frr.get("router_id")
+
     if "ospf" in protocols:
-        router_id = frr.get("router_id")
-        area = frr.get("area", 0)
+        ospf = get_protocol_section(frr, "ospf")
+        router_id = ospf.get("router_id", common_router_id)
 
         lines.append("router ospf")
         if router_id:
             lines.append(f" ospf router-id {router_id}")
 
-        for network in get_frr_networks(node_data):
+        for area in ospf.get("areas", frr.get("areas", [])):
+            if not isinstance(area, dict):
+                continue
+
+            area_id = area.get("id")
+            area_type = str(area.get("type", "")).lower()
+            if area_id is None:
+                continue
+
+            if area_type in {"stub", "nssa"}:
+                suffix = ""
+                if area.get("no_summary") or area.get("totally_stub"):
+                    suffix = " no-summary"
+                lines.append(f" area {area_id} {area_type}{suffix}")
+
+        for network, area in get_ospf_network_area_pairs(node_data):
             lines.append(f" network {network} area {area}")
 
+        add_redistribute_lines(lines, ospf)
         lines.append("!")
 
     if "rip" in protocols:
-        lines.append("router rip")
-        lines.append(" version 2")
-        lines.append(" no auto-summary")
+        rip = get_protocol_section(frr, "rip")
+        version = rip.get("version", frr.get("version", 2))
 
-        for network in get_frr_networks(node_data):
+        lines.append("router rip")
+        lines.append(f" version {version}")
+        if rip.get("auto_summary", False) is False:
+            lines.append(" no auto-summary")
+
+        for network in rip.get("networks", get_rip_networks(node_data)):
             lines.append(f" network {network}")
 
+        add_redistribute_lines(lines, rip)
         lines.append("!")
 
     if "bgp" in protocols:
-        if "asn" not in frr:
-            raise ValueError(f"Il nodo {node_name} usa BGP ma manca frr.asn")
+        bgp = get_protocol_section(frr, "bgp")
+        asn = bgp.get("asn", frr.get("asn"))
+        if asn is None:
+            raise ValueError(f"Il nodo {node_name} usa BGP ma manca frr.asn oppure frr.bgp.asn")
 
-        lines.append(f"router bgp {frr['asn']}")
+        router_id = bgp.get("router_id", common_router_id)
 
-        if frr.get("router_id"):
-            lines.append(f" bgp router-id {frr['router_id']}")
+        lines.append(f"router bgp {asn}")
+        if router_id:
+            lines.append(f" bgp router-id {router_id}")
 
-        if frr.get("ebgp_requires_policy", False) is False:
+        if bgp.get("ebgp_requires_policy", frr.get("ebgp_requires_policy", False)) is False:
             lines.append(" no bgp ebgp-requires-policy")
 
-        if frr.get("network_import_check", False) is False:
+        if bgp.get("network_import_check", frr.get("network_import_check", False)) is False:
             lines.append(" no bgp network import-check")
 
-        for neighbor in frr.get("neighbors", []):
+        for neighbor in bgp.get("neighbors", frr.get("neighbors", [])):
             lines.append(f" neighbor {neighbor['ip']} remote-as {neighbor['remote_as']}")
 
-        for network in frr.get("networks", []):
+        for network in bgp.get("networks", frr.get("networks", [])):
             lines.append(f" network {network}")
 
+        add_redistribute_lines(lines, bgp)
         lines.append("!")
 
     lines.extend([
@@ -310,7 +436,11 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
         if ip_addr:
             lines.append(f"ip address add {ip_addr} dev eth{index}")
 
-    if lines and (node_data.get("default_gateway") or node_data.get("routes") or is_frr_device(node_data)):
+    if lines and (
+        node_data.get("default_gateway")
+        or node_data.get("routes")
+        or is_frr_device(node_data)
+    ):
         lines.append("")
 
     if node_data.get("default_gateway"):
@@ -332,6 +462,49 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
             lines.append(str(command))
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def copy_node_directories(
+    config_path: Path,
+    lab_dir: Path,
+    nodes: dict[str, Any],
+    enabled: bool,
+) -> list[str]:
+    """Copia nel lab le cartelle configs/<node_name>/ quando richiesto.
+
+    Esempio: se il file YAML e' configs/test.yml e viene passato
+    --import-node-dirs, la cartella configs/pc_a/ viene copiata in
+    labs/<lab_name>/pc_a/. In Kathara quei file risultano disponibili
+    nel container del nodo come /hostlab/<file>.
+    """
+    if not enabled:
+        return []
+
+    config_dir = config_path.parent
+    imported: list[str] = []
+
+    ignore = shutil.ignore_patterns(
+        "__pycache__",
+        "*.pyc",
+        ".git",
+        ".DS_Store",
+    )
+
+    for node_name in nodes:
+        source_dir = config_dir / node_name
+        if not source_dir.is_dir():
+            continue
+
+        destination_dir = lab_dir / node_name
+        shutil.copytree(
+            source_dir,
+            destination_dir,
+            dirs_exist_ok=True,
+            ignore=ignore,
+        )
+        imported.append(node_name)
+
+    return imported
 
 
 def bash_quote(value: str) -> str:
@@ -603,7 +776,8 @@ def generate_lab(
     force: bool,
     sniff_node: str | None,
     wireshark_mode: str,
-) -> tuple[Path, str | None, bool]:
+    import_node_dirs: bool,
+) -> tuple[Path, str | None, bool, list[str]]:
     config = load_yaml(config_path)
     validate_config(config)
 
@@ -616,6 +790,13 @@ def generate_lab(
 
     (lab_dir / "lab.conf").write_text(generate_lab_conf(config), encoding="utf-8")
 
+    imported_node_dirs = copy_node_directories(
+        config_path=config_path,
+        lab_dir=lab_dir,
+        nodes=nodes,
+        enabled=import_node_dirs,
+    )
+
     for node_name, node_data in nodes.items():
         startup_path = lab_dir / f"{node_name}.startup"
         startup_path.write_text(generate_startup(node_name, node_data), encoding="utf-8")
@@ -626,7 +807,7 @@ def generate_lab(
 
     wireshark_generated = write_wireshark_scripts(lab_dir, lab_name, selected_sniff_node)
 
-    return lab_dir, selected_sniff_node, wireshark_generated
+    return lab_dir, selected_sniff_node, wireshark_generated, imported_node_dirs
 
 
 def parse_args() -> argparse.Namespace:
@@ -683,6 +864,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--import-node-dirs",
+        action="store_true",
+        help=(
+            "Importa nel laboratorio generato le cartelle dei nodi presenti accanto al file YAML. "
+            "Esempio: configs/pc_a/ viene copiata in labs/<lab_name>/pc_a/."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -691,13 +881,14 @@ def main() -> int:
 
     try:
         config_path, _ = parse_yaml_configuration(args.lab, args.config_dir)
-        lab_dir, selected_sniff_node, wireshark_generated = generate_lab(
+        lab_dir, selected_sniff_node, wireshark_generated, imported_node_dirs = generate_lab(
             config_path=config_path,
             output_dir=args.output_dir,
             clean=args.clean,
             force=args.force,
             sniff_node=args.sniff_node,
             wireshark_mode=args.wireshark,
+            import_node_dirs=args.import_node_dirs,
         )
 
         print(f"[OK] Configurazione letta: {config_path}")
@@ -720,6 +911,12 @@ def main() -> int:
             print("  ./stop_wireshark.sh")
         else:
             print("Script Wireshark non generati.")
+
+        if imported_node_dirs:
+            print("")
+            print("Cartelle nodo importate:")
+            for node_name in imported_node_dirs:
+                print(f"  - {node_name}")
 
         return 0
 

@@ -1,15 +1,28 @@
-lab_name: multi-lans
+lab_name: Test1_multi_area
 
-description: Topologia con più LAN collegate tramite router in maglia estesa con OSPF.
+description: Primo test OSPF multi-area con server accessibile via nc
 
 metadata:
-  description: "Multi-LAN OSPF or RIP topology"
+  description: "Testing connections with a server using multi-area OSPF"
   version: 2.0
   author: "Luca-Bortoluzzi"
   email: "luca.bortoluzzi921@edu.unito.it"
   web: "http://www.kathara.org/"
 
 nodes:
+  server:
+    type: host
+    interfaces:
+      - network: dmz
+        ip: 10.0.20.10/24
+    default_gateway: 10.0.20.1
+    services:
+      - name: simple_python_service
+        runtime: python3
+        file: service.py
+        port: 9000
+        autostart: true
+
   pc_a:
     type: host
     interfaces:
@@ -43,64 +56,99 @@ nodes:
     interfaces:
       - network: lan_a
         ip: 10.10.1.1/24
+        ospf_area: 10
       - network: r1_r2
         ip: 10.0.12.1/30
+        ospf_area: 0
       - network: r1_r3
         ip: 10.0.13.1/30
+        ospf_area: 0
     frr:
       enabled: true
       protocol: ospf
       router_id: 1.1.1.1
-      area: 0
 
   r2:
     type: router
     interfaces:
       - network: lan_b
         ip: 10.10.2.1/24
+        ospf_area: 10
       - network: r1_r2
         ip: 10.0.12.2/30
+        ospf_area: 0
       - network: r2_r3
         ip: 10.0.23.1/30
+        ospf_area: 0
       - network: r2_r4
         ip: 10.0.24.1/30
+        ospf_area: 20
     frr:
       enabled: true
       protocol: ospf
       router_id: 2.2.2.2
-      area: 0
 
   r3:
     type: router
     interfaces:
       - network: lan_c
         ip: 10.10.3.1/24
+        ospf_area: 20
       - network: r1_r3
         ip: 10.0.13.2/30
+        ospf_area: 0
       - network: r2_r3
         ip: 10.0.23.2/30
+        ospf_area: 0
       - network: r3_r4
         ip: 10.0.34.1/30
+        ospf_area: 20
+      - network: r3_r5
+        ip: 10.0.35.1/30
+        ospf_area: 0
     frr:
       enabled: true
       protocol: ospf
       router_id: 3.3.3.3
-      area: 0
 
   r4:
     type: router
     interfaces:
       - network: lan_d
         ip: 10.10.4.1/24
+        ospf_area: 20
       - network: r2_r4
         ip: 10.0.24.2/30
+        ospf_area: 20
       - network: r3_r4
         ip: 10.0.34.2/30
+        ospf_area: 20
     frr:
       enabled: true
       protocol: ospf
       router_id: 4.4.4.4
-      area: 0
 
+  r5:
+    type: router
+    interfaces:
+      - network: dmz
+        ip: 10.0.20.1/24
+        ospf_area: 30
+      - network: r3_r5
+        ip: 10.0.35.2/30
+        ospf_area: 0
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 5.5.5.5
 
-
+connection_tests:
+  enabled: true
+  scenario: ospf_multi_area
+  clients: [pc_a, pc_b, pc_c, pc_d]
+  target_node: server
+  target_ip: 10.0.20.10
+  port: 9000
+  attempts: 10
+  timeout: 2
+  delay: 1
