@@ -19,7 +19,7 @@ def handle_client(conn, addr):
     if data == "1":
         conn.sendall(b"\npong\n")
     elif data == "2":
-        conn.sendall(b"\nServer DMZ - IP 10.0.20.10 - Porta 9000\n")
+        conn.sendall(b"\nServer DMZ\n")
     elif data == "3":
         conn.sendall(b"\nChiusura connessione\n")
     else:

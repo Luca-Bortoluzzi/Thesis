@@ -3,13 +3,13 @@
 show_connection_results.py
 
 Legge i risultati generati da run_connection_tests.py e mostra un report
-sintetico. Non esegue test e non crea nuovi log.
+sintetico. Con --plot genera anche un diagramma RTT per client, basato sul
+rapporto tra numero pacchetto/richiesta e RTT in millisecondi.
 
-Uso, dalla cartella del laboratorio:
+Uso:
     ./show_connection_results.py
-
-Oppure indicando un CSV specifico:
-    ./show_connection_results.py results/connection_results_baseline_20260605_112113.csv
+    ./show_connection_results.py --plot
+    ./show_connection_results.py results/connection_results_baseline_YYYYmmdd_HHMMSS.csv --plot
 """
 
 from __future__ import annotations
@@ -43,6 +43,13 @@ def safe_float(value: str) -> float | None:
         return None
 
 
+def safe_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def print_metric_table(metrics: list[tuple[str, object]]) -> None:
     print("Metriche generali")
     print(f"{'Metrica':<35} {'Valore':<18}")
@@ -71,7 +78,7 @@ def build_report(rows: list[dict[str, str]]) -> tuple[list[tuple[str, object]], 
     ok = sum(1 for row in rows if row.get("status") == "OK")
     fail = total - ok
 
-    elapsed_values = [safe_float(row.get("elapsed_ms", "")) for row in rows]
+    elapsed_values = [safe_float(row.get("elapsed_ms", "")) for row in rows if row.get("status") == "OK"]
     elapsed_values = [value for value in elapsed_values if value is not None]
     avg_ms = f"{mean(elapsed_values):.2f}" if elapsed_values else "N/D"
 
@@ -83,11 +90,11 @@ def build_report(rows: list[dict[str, str]]) -> tuple[list[tuple[str, object]], 
         client_raw[client]["total"] += 1
         if row.get("status") == "OK":
             client_raw[client]["ok"] += 1
+            value = safe_float(row.get("elapsed_ms", ""))
+            if value is not None:
+                client_raw[client]["elapsed"].append(value)
         else:
             client_raw[client]["fail"] += 1
-        value = safe_float(row.get("elapsed_ms", ""))
-        if value is not None:
-            client_raw[client]["elapsed"].append(value)
 
     client_stats: dict[str, dict[str, object]] = {}
     for client, data in client_raw.items():
@@ -113,17 +120,71 @@ def build_report(rows: list[dict[str, str]]) -> tuple[list[tuple[str, object]], 
 def infer_context(rows: list[dict[str, str]]) -> dict[str, str]:
     first = rows[0] if rows else {}
     clients = sorted({row.get("client", "") for row in rows if row.get("client")})
+    target = first.get("target", "N/D")
+    if first.get("target_input") and first.get("target_input") != target:
+        target = f"{first.get('target_input')} -> {target}"
     return {
         "scenario": first.get("scenario", "N/D"),
-        "target": first.get("target", "N/D"),
+        "target": target,
         "port": first.get("port", "N/D"),
         "clients": ", ".join(clients) if clients else "N/D",
     }
 
 
+def derive_plot_path(csv_path: Path) -> Path:
+    plots_dir = csv_path.parent / "plots"
+    plots_dir.mkdir(exist_ok=True)
+    return plots_dir / f"{csv_path.stem}_rtt.png"
+
+
+def generate_rtt_plot(rows: list[dict[str, str]], csv_path: Path, output_path: Path | None = None) -> Path:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError("matplotlib non installato. Installa con: pip install matplotlib") from exc
+
+    if output_path is None:
+        output_path = derive_plot_path(csv_path)
+
+    by_client: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    for row in rows:
+        if row.get("status") != "OK":
+            continue
+        client = row.get("client", "N/D")
+        packet_raw = row.get("packet_number") or row.get("attempt") or ""
+        packet = safe_int(packet_raw)
+        elapsed = safe_float(row.get("elapsed_ms", ""))
+        if packet is None or elapsed is None:
+            continue
+        by_client[client].append((packet, elapsed))
+
+    if not by_client:
+        raise RuntimeError("Nessun dato OK disponibile per generare il grafico RTT.")
+
+    plt.figure(figsize=(10, 6))
+    for client in sorted(by_client):
+        points = sorted(by_client[client], key=lambda item: item[0])
+        x_values = [point[0] for point in points]
+        y_values = [point[1] for point in points]
+        plt.plot(x_values, y_values, marker="o", label=client)
+
+    context = infer_context(rows)
+    plt.title(f"RTT per pacchetto/richiesta - scenario {context['scenario']}")
+    plt.xlabel("Pacchetto / richiesta")
+    plt.ylabel("RTT / tempo connessione (ms)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    return output_path
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Mostra il riepilogo dei risultati dei test nc.")
+    parser = argparse.ArgumentParser(description="Mostra il riepilogo dei risultati dei test TCP.")
     parser.add_argument("csv_file", nargs="?", help="CSV da leggere. Se omesso, usa l'ultimo in results/.")
+    parser.add_argument("--plot", action="store_true", help="Genera un grafico RTT per client.")
+    parser.add_argument("--plot-output", help="Percorso PNG da generare. Default: results/plots/<csv>_rtt.png")
     return parser.parse_args()
 
 
@@ -138,7 +199,7 @@ def main() -> int:
 
     rows = load_rows(csv_path)
     if not rows:
-        print(f"[ERRORE] Il file CSV è vuoto: {csv_path}", file=sys.stderr)
+        print(f"[ERRORE] Il file CSV e' vuoto: {csv_path}", file=sys.stderr)
         return 1
 
     context = infer_context(rows)
@@ -161,6 +222,16 @@ def main() -> int:
     else:
         for error, count in errors.most_common():
             print(f"- {error}: {count}")
+
+    if args.plot:
+        output_path = Path(args.plot_output) if args.plot_output else None
+        try:
+            plot_path = generate_rtt_plot(rows, csv_path=csv_path, output_path=output_path)
+        except Exception as exc:
+            print(f"[ERRORE] Plot non generato: {exc}", file=sys.stderr)
+            return 1
+        print("")
+        print(f"[OK] Grafico RTT generato: {plot_path}")
 
     return 0
 
