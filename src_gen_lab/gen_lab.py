@@ -214,7 +214,7 @@ def add_redistribute_lines(lines: list[str], section: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def generate_lab_conf(config: dict[str, Any]) -> str:
+def generate_lab_conf(config: dict[str, Any], wireshark_networks: list[str] | None = None) -> str:
     lab_name = config["lab_name"]
     nodes = config["nodes"]
     metadata = config.get("metadata", {})
@@ -241,6 +241,8 @@ def generate_lab_conf(config: dict[str, Any]) -> str:
 
         lines.append(f'{node_name}[image]="{get_node_image(node_data)}"')
         lines.append("")
+
+    append_wireshark_to_lab_conf(lines, wireshark_networks or [])
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -507,288 +509,303 @@ def copy_node_directories(
     return imported
 
 
+
 def bash_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def sniffable_nodes(config: dict[str, Any]) -> list[str]:
-    nodes = config["nodes"]
-    preferred = [name for name, data in nodes.items() if is_frr_device(data)]
-    return preferred if preferred else list(nodes.keys())
+# ---------------------------------------------------------------------------
+# Wireshark real-time integrato nel lab.conf secondo il modello Kathara
+# ---------------------------------------------------------------------------
+
+WIRESHARK_NODE_NAME = "wireshark"
+WIRESHARK_IMAGE = "lscr.io/linuxserver/wireshark"
 
 
-def ask_yes_no(question: str, default: bool = False) -> bool:
-    default_label = "S/n" if default else "s/N"
-    answer = input(f"{question} [{default_label}]: ").strip().lower()
-    if not answer:
-        return default
-    return answer in {"s", "si", "sì", "y", "yes"}
+def collision_domains(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Restituisce i collision domain presenti nel laboratorio."""
+    domains: dict[str, dict[str, Any]] = {}
 
-
-def choose_sniff_node(
-    config: dict[str, Any],
-    requested: str | None,
-    wireshark_mode: str,
-) -> str | None:
-    nodes = config["nodes"]
-
-    if requested:
-        if requested not in nodes:
-            raise ValueError(
-                f"Nodo di sniffing '{requested}' non trovato nel YAML. "
-                f"Nodi disponibili: {', '.join(nodes.keys())}"
+    for node_name, node_data in config["nodes"].items():
+        for index, interface in enumerate(node_data.get("interfaces", [])):
+            network = str(interface["network"])
+            domain = domains.setdefault(network, {"name": network, "attachments": []})
+            domain["attachments"].append(
+                {
+                    "node": node_name,
+                    "type": node_type(node_data),
+                    "eth": f"eth{index}",
+                    "ip": interface.get("ip"),
+                }
             )
-        return requested
 
-    wireshark = config.get("wireshark", {})
-    if isinstance(wireshark, dict) and wireshark.get("enabled") is False:
-        return None
+    return list(domains.values())
 
-    if isinstance(wireshark, dict) and wireshark.get("sniff_node"):
-        node = str(wireshark["sniff_node"])
-        if node not in nodes:
-            raise ValueError(
-                f"wireshark.sniff_node '{node}' non trovato nel YAML. "
-                f"Nodi disponibili: {', '.join(nodes.keys())}"
-            )
-        return node
 
-    if wireshark_mode == "disabled":
-        return None
+def format_domain_summary(domain: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for item in domain["attachments"]:
+        label = f"{item['node']}:{item['eth']}"
+        if item.get("ip"):
+            label += f"({item['ip']})"
+        parts.append(label)
+    return ", ".join(parts)
 
-    candidates = sniffable_nodes(config)
 
-    if not sys.stdin.isatty():
-        return None
-
-    if wireshark_mode == "ask":
-        print("\nStrumentazione Wireshark")
-        if not ask_yes_no("Vuoi generare gli script automatici Wireshark per questo laboratorio?", default=False):
-            return None
-
-    print("\nNodi disponibili per lo sniffing Wireshark:")
-    for i, name in enumerate(candidates, start=1):
-        data = nodes[name]
-        interfaces = data.get("interfaces", [])
-        nets = ", ".join(
-            str(iface.get("network", f"eth{idx}"))
-            for idx, iface in enumerate(interfaces)
-        )
-        ip_list = ", ".join(
-            str(iface.get("ip"))
-            for iface in interfaces
-            if iface.get("ip")
-        )
-        extra = f" | IP: {ip_list}" if ip_list else ""
-        print(f"  {i}) {name}  [{node_type(data)}]  reti: {nets}{extra}")
-
-    print("  0) non generare script Wireshark")
-    choice = input("Scegli il dispositivo su cui fare sniffing: ").strip()
-
+def parse_network_selection(choice: str, domains: list[dict[str, Any]]) -> list[str] | None:
+    """Interpreta la scelta utente: 0, all, indici, nomi o lista mista."""
+    choice = choice.strip()
     if choice in {"", "0"}:
         return None
 
-    try:
-        index = int(choice)
-        if 1 <= index <= len(candidates):
-            return candidates[index - 1]
-    except ValueError:
-        pass
+    if choice.lower() in {"all", "tutte", "tutti", "*"}:
+        return [domain["name"] for domain in domains]
 
-    if choice in candidates:
-        return choice
+    by_name = {domain["name"]: domain["name"] for domain in domains}
+    selected: list[str] = []
 
-    raise ValueError(f"Scelta non valida: {choice}")
+    for raw_token in choice.replace(";", ",").split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
 
+        if token.isdigit():
+            index = int(token)
+            if not (1 <= index <= len(domains)):
+                raise ValueError(f"Indice rete non valido: {token}")
+            selected.append(domains[index - 1]["name"])
+            continue
 
-def generate_start_wireshark_script(lab_name: str, sniff_node: str) -> str:
-    quoted_lab = bash_quote(lab_name)
-    quoted_node = bash_quote(sniff_node)
-    return f'''#!/bin/bash
-set -e
+        if token not in by_name:
+            raise ValueError(
+                f"Collision domain '{token}' non trovato. "
+                f"Reti disponibili: {', '.join(by_name.keys())}"
+            )
+        selected.append(token)
 
-IMAGE="lscr.io/linuxserver/wireshark:latest"
-LAB_NAME={quoted_lab}
-SNIFF_NODE={quoted_node}
-IFACE="${{1:-any}}"
+    return unique_preserve_order(selected)
 
-LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
-CAPTURE_DIR="$LAB_DIR/captures"
-CONFIG_DIR="$HOME/wireshark-config-$LAB_NAME"
+def ask_yes_no(question: str, default: bool = False) -> bool:
+    """Legge una risposta sì/no da terminale."""
+    default_label = "S/n" if default else "s/N"
+    answer = input(f"{question} [{default_label}]: ").strip().lower()
 
-mkdir -p "$CAPTURE_DIR" "$CONFIG_DIR"
-chmod 777 "$CAPTURE_DIR" || true
+    if not answer:
+        return default
 
-TARGET_CONTAINER=$(docker ps --format "{{{{.Names}}}}" | grep -E "^kathara_.*_${{SNIFF_NODE}}_" | head -n 1)
+    if answer in {"s", "si", "sì", "y", "yes"}:
+        return True
 
-if [ -z "$TARGET_CONTAINER" ]; then
-  echo "[ERRORE] Nessun container Kathara trovato per nodo: $SNIFF_NODE"
-  echo "[INFO] Container Kathara attivi:"
-  docker ps --format "{{{{.Names}}}}" | grep '^kathara_' || true
-  echo ""
-  echo "Avvia prima il lab dalla cartella:"
-  echo "  kathara lstart"
-  exit 1
-fi
-
-echo "[OK] Nodo sniffing: $SNIFF_NODE"
-echo "[OK] Container target: $TARGET_CONTAINER"
-echo "[OK] Interfaccia: $IFACE"
-echo "[OK] Cartella catture: $CAPTURE_DIR"
-
-docker rm -f "wireshark-sniffer-$LAB_NAME" "wireshark-gui-$LAB_NAME" 2>/dev/null || true
-
-docker pull "$IMAGE"
-
-docker run -d \
-  --name "wireshark-sniffer-$LAB_NAME" \
-  --net=container:"$TARGET_CONTAINER" \
-  --cap-add=NET_ADMIN \
-  --cap-add=NET_RAW \
-  -e TZ=Europe/Rome \
-  -e IFACE="$IFACE" \
-  -e SNIFF_NODE="$SNIFF_NODE" \
-  -v "$CAPTURE_DIR:/captures" \
-  --restart unless-stopped \
-  --entrypoint /bin/bash \
-  "$IMAGE" \
-  -lc '
-    set -e
-    echo "[SNIFFER] Avviato nel namespace del nodo Kathara"
-    echo "[SNIFFER] Interfacce disponibili:"
-    ip link show
-
-    mkdir -p /captures
-    chmod 777 /captures || true
-
-    if ! touch /captures/test_write.tmp 2>/dev/null; then
-      echo "[ERRORE] /captures non è scrivibile."
-      ls -ld /captures || true
-      sleep infinity
-    fi
-    rm -f /captures/test_write.tmp
-
-    while true; do
-      chmod -R a+rwx /captures 2>/dev/null || true
-      sleep 2
-    done &
-
-    FILE="/captures/${{SNIFF_NODE}}_$(date +%Y%m%d_%H%M%S).pcapng"
-    echo "[SNIFFER] Cattura su interfaccia: $IFACE"
-    echo "[SNIFFER] File output: $FILE"
-
-    if command -v dumpcap >/dev/null 2>&1; then
-      exec dumpcap -p -i "$IFACE" -w "$FILE" -b filesize:10240 -b files:20
-    elif command -v tshark >/dev/null 2>&1; then
-      exec tshark -p -i "$IFACE" -w "$FILE" -b filesize:10240 -b files:20
-    else
-      echo "[ERRORE] Né dumpcap né tshark sono disponibili nell’immagine."
-      sleep infinity
-    fi
-  '
-
-docker run -d \
-  --name "wireshark-gui-$LAB_NAME" \
-  -p 3000:3000 \
-  -p 3001:3001 \
-  --cap-add=NET_ADMIN \
-  --cap-add=NET_RAW \
-  -e PUID=0 \
-  -e PGID=0 \
-  -e TZ=Europe/Rome \
-  -v "$CONFIG_DIR:/config" \
-  -v "$CAPTURE_DIR:/captures" \
-  --shm-size="1gb" \
-  --restart unless-stopped \
-  "$IMAGE"
-
-echo ""
-echo "[OK] Wireshark automatico avviato."
-echo "Log sniffer:"
-echo "  ./sniff.sh"
-echo "  docker logs -f wireshark-sniffer-$LAB_NAME"
-echo "GUI Wireshark:"
-echo "  http://localhost:3000"
-echo "Catture host:"
-echo "  $CAPTURE_DIR"
-echo "Dentro Wireshark apri:"
-echo "  /captures"
-'''
-
-
-def generate_sniff_wireshark_script(lab_name: str) -> str:
-    quoted_lab = bash_quote(lab_name)
-    return f"""#!/bin/bash
-LAB_NAME={quoted_lab}
-CONTAINER=\"wireshark-sniffer-$LAB_NAME\"
-
-if ! docker ps --format "{{{{.Names}}}}" | grep -qx "$CONTAINER"; then
-  echo "[ERRORE] Container sniffer non attivo: $CONTAINER"
-  echo "Avvia prima Wireshark con:"
-  echo "  ./start_wireshark.sh [any|eth0|eth1|...]"
-  echo ""
-  echo "Container Wireshark disponibili:"
-  docker ps --format "{{{{.Names}}}}" | grep '^wireshark-' || true
-  exit 1
-fi
-
-echo "[OK] Seguo i log dello sniffer: $CONTAINER"
-echo "[INFO] Premi CTRL+C per uscire dai log. Lo sniffing continuerà in background."
-echo ""
-exec docker logs -f "$CONTAINER"
-"""
-
-
-def generate_stop_wireshark_script(lab_name: str) -> str:
-    quoted_lab = bash_quote(lab_name)
-    return f'''#!/bin/bash
-LAB_NAME={quoted_lab}
-docker rm -f "wireshark-sniffer-$LAB_NAME" "wireshark-gui-$LAB_NAME" 2>/dev/null || true
-echo "[OK] Wireshark fermato per lab: $LAB_NAME"
-'''
-
-
-def write_wireshark_scripts(lab_dir: Path, lab_name: str, sniff_node: str | None) -> bool:
-    start_path = lab_dir / "start_wireshark.sh"
-    stop_path = lab_dir / "stop_wireshark.sh"
-    sniff_path = lab_dir / "sniff.sh"
-
-    if not sniff_node:
-        for script_path in (start_path, stop_path, sniff_path):
-            if script_path.exists():
-                script_path.unlink()
+    if answer in {"n", "no"}:
         return False
 
-    start_path.write_text(generate_start_wireshark_script(lab_name, sniff_node), encoding="utf-8")
-    stop_path.write_text(generate_stop_wireshark_script(lab_name), encoding="utf-8")
-    sniff_path.write_text(generate_sniff_wireshark_script(lab_name), encoding="utf-8")
+    print("Risposta non riconosciuta: considero 'no'.")
+    return False
 
-    os.chmod(start_path, 0o755)
-    os.chmod(stop_path, 0o755)
-    os.chmod(sniff_path, 0o755)
-    return True
+def normalize_wireshark_networks(value: Any) -> list[str]:
+    """Normalizza reti/collision domain passati da YAML o CLI."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    raise ValueError("wireshark.networks deve essere una stringa o una lista.")
 
+
+def networks_attached_to_node(config: dict[str, Any], node_name: str) -> list[str]:
+    """Restituisce le reti/collision domain a cui e' collegato un nodo."""
+    nodes = config["nodes"]
+    if node_name not in nodes:
+        raise ValueError(
+            f"Nodo '{node_name}' non trovato. Nodi disponibili: {', '.join(nodes.keys())}"
+        )
+    return unique_preserve_order(
+        [str(interface["network"]) for interface in nodes[node_name].get("interfaces", [])]
+    )
+
+
+def parse_network_selection(choice: str, domains: list[dict[str, Any]], config: dict[str, Any]) -> list[str] | None:
+    """Interpreta la scelta utente.
+
+    Formati supportati:
+    - 0 oppure invio: nessun Wireshark;
+    - all / tutte / *: tutte le reti;
+    - indici: 1 oppure 1,3,5;
+    - nomi rete: lan_a oppure lan_a,r1_r2;
+    - node:<nome>: tutte le reti collegate al nodo, es. node:r1.
+    """
+    choice = choice.strip()
+    if choice in {"", "0"}:
+        return None
+
+    if choice.lower() in {"all", "tutte", "tutti", "*"}:
+        return [domain["name"] for domain in domains]
+
+    by_name = {domain["name"]: domain["name"] for domain in domains}
+    selected: list[str] = []
+
+    for raw_token in choice.replace(";", ",").split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+
+        lower_token = token.lower()
+        if lower_token.startswith("node:") or lower_token.startswith("nodo:"):
+            node_name = token.split(":", 1)[1].strip()
+            selected.extend(networks_attached_to_node(config, node_name))
+            continue
+
+        if token.isdigit():
+            index = int(token)
+            if not (1 <= index <= len(domains)):
+                raise ValueError(f"Indice rete non valido: {token}")
+            selected.append(domains[index - 1]["name"])
+            continue
+
+        if token not in by_name:
+            raise ValueError(
+                f"Collision domain '{token}' non trovato. "
+                f"Reti disponibili: {', '.join(by_name.keys())}"
+            )
+        selected.append(token)
+
+    return unique_preserve_order(selected)
+
+
+def ask_yes_no(question: str, default: bool = False) -> bool:
+    """Legge una risposta sì/no da terminale."""
+    default_label = "S/n" if default else "s/N"
+    answer = input(f"{question} [{default_label}]: ").strip().lower()
+
+    if not answer:
+        return default
+
+    if answer in {"s", "si", "sì", "y", "yes"}:
+        return True
+
+    if answer in {"n", "no"}:
+        return False
+
+    print("Risposta non riconosciuta: considero 'no'.")
+    return False
+
+
+def choose_wireshark_networks(
+    config: dict[str, Any],
+    requested_networks: str | None,
+    wireshark_mode: str,
+) -> list[str]:
+    """Determina dove collegare Wireshark.
+
+    Nel modello Kathara ufficiale Wireshark non viene agganciato a un router,
+    ma viene collegato a uno o piu' collision domain del lab.conf. Per aiutare
+    l'utente, il menu mostra anche quali nodi/interfacce appartengono a ciascuna rete.
+    """
+    domains = collision_domains(config)
+    available = {domain["name"] for domain in domains}
+
+    def validate_networks(networks: list[str]) -> list[str]:
+        result = unique_preserve_order(networks)
+        invalid = [network for network in result if network not in available]
+        if invalid:
+            raise ValueError(
+                f"Collision domain Wireshark non presenti nel YAML: {', '.join(invalid)}. "
+                f"Disponibili: {', '.join(sorted(available))}"
+            )
+        return result
+
+    if requested_networks:
+        # CLI: --wireshark-networks lan_a,r1_r2 oppure --wireshark-networks node:r1
+        parsed = parse_network_selection(requested_networks, domains, config)
+        return validate_networks(parsed or [])
+
+    wireshark = config.get("wireshark", {})
+    if isinstance(wireshark, dict):
+        if wireshark.get("enabled") is False:
+            return []
+
+        yaml_networks = normalize_wireshark_networks(
+            wireshark.get("networks", wireshark.get("network"))
+        )
+        if yaml_networks:
+            # Supporta anche YAML: wireshark: { networks: "node:r1" }
+            parsed = parse_network_selection(",".join(yaml_networks), domains, config)
+            return validate_networks(parsed or [])
+
+    if wireshark_mode == "disabled":
+        return []
+
+    if not sys.stdin.isatty():
+        return []
+
+    if wireshark_mode == "ask":
+        print("\nStrumentazione Wireshark real-time")
+        if not ask_yes_no("Vuoi implementare Wireshark real-time in questo laboratorio?", default=False):
+            return []
+
+    print("\nDove vuoi collegare Wireshark?")
+    print("Nel modello Kathara Wireshark si collega a una o piu' reti/collision domain.")
+    print("Scegli il punto del laboratorio da osservare.")
+    print("\nCollision domain disponibili:")
+    for i, domain in enumerate(domains, start=1):
+        print(f"  {i}) {domain['name']}  | nodi: {format_domain_summary(domain)}")
+    print("  all) collegare Wireshark a tutte le reti")
+    print("  node:<nome>) collegare Wireshark a tutte le reti di un nodo, es. node:r1")
+    print("  0) non generare Wireshark")
+
+    choice = input("Scelta (es. 1 oppure 1,3 oppure lan_a,r1_r2 oppure node:r1): ")
+    selected = parse_network_selection(choice, domains, config)
+    return validate_networks(selected or [])
+
+
+def append_wireshark_to_lab_conf(lines: list[str], networks: list[str]) -> None:
+    """Aggiunge al lab.conf il nodo Wireshark come nel tutorial Kathara."""
+    if not networks:
+        return
+
+    lines.append("# Wireshark real-time packet capture")
+    for index, network in enumerate(networks):
+        lines.append(f'{WIRESHARK_NODE_NAME}[{index}]="{network}"')
+    lines.append(f'{WIRESHARK_NODE_NAME}[bridged]=true')
+    lines.append(f'{WIRESHARK_NODE_NAME}[port]="3000:3000/tcp"')
+    lines.append(f'{WIRESHARK_NODE_NAME}[image]="{WIRESHARK_IMAGE}"')
+    lines.append("")
+
+
+
+def remove_legacy_wireshark_scripts(lab_dir: Path) -> None:
+    """Rimuove eventuali script Wireshark legacy non più necessari.
+
+    Con l'integrazione real-time ufficiale, Wireshark è un nodo Kathara
+    definito direttamente in lab.conf. Non servono più start_wireshark.sh,
+    sniff.sh o stop_wireshark.sh.
+    """
+    for script_name in ("start_wireshark.sh", "sniff.sh", "stop_wireshark.sh"):
+        script_path = lab_dir / script_name
+        if script_path.exists():
+            script_path.unlink()
 
 def generate_lab(
     config_path: Path,
     output_dir: Path,
     clean: bool,
     force: bool,
-    sniff_node: str | None,
+    wireshark_networks: str | None,
     wireshark_mode: str,
     import_node_dirs: bool,
-) -> tuple[Path, str | None, bool, list[str]]:
+) -> tuple[Path, list[str], bool, list[str]]:
     config = load_yaml(config_path)
     validate_config(config)
 
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
-    selected_sniff_node = choose_sniff_node(config, sniff_node, wireshark_mode)
+    selected_wireshark_networks = choose_wireshark_networks(config, wireshark_networks, wireshark_mode)
 
     lab_dir = output_dir / lab_name
     prepare_lab_directory(lab_dir, clean=clean, force=force)
 
-    (lab_dir / "lab.conf").write_text(generate_lab_conf(config), encoding="utf-8")
+    (lab_dir / "lab.conf").write_text(generate_lab_conf(config, selected_wireshark_networks), encoding="utf-8")
 
     imported_node_dirs = copy_node_directories(
         config_path=config_path,
@@ -805,9 +822,11 @@ def generate_lab(
         if is_frr_device(node_data):
             write_frr_files(lab_dir, node_name, node_data)
 
-    wireshark_generated = write_wireshark_scripts(lab_dir, lab_name, selected_sniff_node)
+    # Gli script legacy non sono più necessari: Wireshark è già nel lab.conf.
+    remove_legacy_wireshark_scripts(lab_dir)
+    wireshark_integrated = bool(selected_wireshark_networks)
 
-    return lab_dir, selected_sniff_node, wireshark_generated, imported_node_dirs
+    return lab_dir, selected_wireshark_networks, wireshark_integrated, imported_node_dirs
 
 
 def parse_args() -> argparse.Namespace:
@@ -848,9 +867,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--sniff-node",
+        "--wireshark-networks",
         default=None,
-        help="Nodo Kathara su cui generare lo sniffing Wireshark automatico, ad esempio r1, r2, router.",
+        help=(
+            "Collision domain da collegare a Wireshark, separati da virgola. "
+            "Esempio: lan_a,r1_r2. Se omesso, con --wireshark enabled/ask viene chiesto a terminale."
+        ),
     )
 
     parser.add_argument(
@@ -858,9 +880,9 @@ def parse_args() -> argparse.Namespace:
         choices=["ask", "enabled", "disabled"],
         default="ask",
         help=(
-            "Modalità generazione script Wireshark: "
-            "ask chiede a terminale, enabled salta la prima domanda e chiede solo il nodo, "
-            "disabled non genera script. Default: ask."
+            "Modalità Wireshark real-time: "
+            "ask chiede a terminale, enabled salta la prima domanda e chiede solo le reti, "
+            "disabled non aggiunge Wireshark al lab.conf. Default: ask."
         ),
     )
 
@@ -881,12 +903,12 @@ def main() -> int:
 
     try:
         config_path, _ = parse_yaml_configuration(args.lab, args.config_dir)
-        lab_dir, selected_sniff_node, wireshark_generated, imported_node_dirs = generate_lab(
+        lab_dir, selected_wireshark_networks, wireshark_generated, imported_node_dirs = generate_lab(
             config_path=config_path,
             output_dir=args.output_dir,
             clean=args.clean,
             force=args.force,
-            sniff_node=args.sniff_node,
+            wireshark_networks=args.wireshark_networks,
             wireshark_mode=args.wireshark,
             import_node_dirs=args.import_node_dirs,
         )
@@ -905,12 +927,14 @@ def main() -> int:
         print("")
 
         if wireshark_generated:
-            print(f"Script Wireshark generati per il nodo: {selected_sniff_node}")
-            print("  ./start_wireshark.sh [any|eth0|eth1|...]")
-            print("  ./sniff.sh")
-            print("  ./stop_wireshark.sh")
+            print("Wireshark real-time integrato nel lab.conf.")
+            print(f"Collision domain osservati: {', '.join(selected_wireshark_networks)}")
+            print("Per avviare Wireshark basta avviare il laboratorio:")
+            print("  kathara lstart")
+            print("GUI: http://localhost:3000")
+            print("Credenziali standard LinuxServer Wireshark: abc / abc")
         else:
-            print("Script Wireshark non generati.")
+            print("Wireshark non integrato nel laboratorio.")
 
         if imported_node_dirs:
             print("")
