@@ -1,33 +1,40 @@
-# Thesis Project Technical Report
+# Technical Report – Kathara Network Lab Generator
 
-## Overview
+## 1. Project Overview
 
-This project generates Kathara virtual labs from YAML configuration files. The generator creates the necessary structure to launch network topologies with hosts, routers, switches, and firewalls, including `lab.conf`, node `.startup` files, and FRR configurations.
+This project provides a Python-based framework for automatically generating Kathara network laboratories from YAML configuration files.
 
-The goal is to support experiments on containerized networks with declaratively defined topologies, making it easy to generate and run educational and test labs.
+The main goal is to describe a network topology in a structured and readable format, then automatically generate a complete Kathara lab containing:
 
-## Project structure
+- `lab.conf`;
+- startup files for each device;
+- FRRouting configuration files;
+- optional Wireshark integration;
+- optional file import into hosts;
+- connection testing tools;
+- controlled DoS simulation support.
+
+The project is designed for educational, experimental, and validation purposes. It allows repeatable testing of different network topologies without manually writing all Kathara configuration files.
+
+The general project structure is:
 
 ```text
 Thesis/
-├── configs/                 # YAML files describing topologies
-├── gen_lab/                 # Python package that generates labs
-│   ├── __init__.py
-│   ├── Lexer.py             # YAML loading and config path resolution
-│   ├── Parser.py            # YAML syntax validation
-│   ├── gen_lab.py           # Lab generation logic
-│   └── generate_lab.py      # Package entrypoint
-├── generate_lab.sh          # Convenience script to generate labs
-├── start.sh                 # Lab startup script for Kathara
-├── stop.sh                  # Lab shutdown script
-├── del_lab.sh               # Script to remove generated labs
-├── server/                  # Application service used in tests
-│   └── service.py
-├── run_connection_tests.py  # Runs connectivity tests against lab services
-├── show_connection_results.py # Displays test results summary
-├── labs/                    # Generated labs ready for Kathara
-├── logs/
-└── results/
+├── configs/                       # YAML topology files and optional host files
+├── src_gen_lab/                   # Core generator modules
+│   ├── Lexer.py
+│   ├── Parser.py
+│   └── gen_lab.py
+├── generate_lab.py                # Main lab generation wrapper
+├── start.sh                       # Lab startup script
+├── stop.sh                        # Lab shutdown script
+├── del_lab.sh                     # Generated lab removal script
+├── run_connection_tests.py        # TCP connection test script
+├── show_connection_results.py     # Result analysis and RTT plot script
+├── attacks/                       # Controlled DoS-related scripts
+├── labs/                          # Generated Kathara labs
+├── logs/                          # Test logs
+└── results/                       # CSV results and generated plots
 ```
 
 ## Requirements
@@ -62,42 +69,44 @@ Supported options:
 
 ## Generator architecture details
 
-### `generate_lab.sh`
+### YAML Topology Description
 
-A small wrapper script that invokes the Python `gen_lab` package with the provided arguments.
+Each lab is defined through a YAML file stored inside the configs/ directory.
 
-### `gen_lab/` package
-
-- `Lexer.py`: loads the YAML file, verifies it is valid, and resolves the configuration path.
-- `Parser.py`: validates the YAML structure with required field and type checks.
-- `gen_lab.py`: generates `lab.conf`, node `.startup` files, FRR configurations, and optional Wireshark scripts.
-- `generate_lab.py`: package entrypoint used by `generate_lab.sh`.
-
-### Generation workflow
-
-1. The YAML loader reads the file and returns the parsed data.
-2. The parser validates `lab_name`, `nodes`, `interfaces`, and `network` fields.
-3. The lab directory is created at `labs/<lab_name>`.
-4. `lab.conf` is generated with node interfaces and images.
-5. Each node receives a `<node>.startup` file.
-6. Routers/switches/firewalls receive FRR configuration under `<node>/etc/frr`.
-7. Optional Wireshark helper scripts are generated if requested.
-
-## Supported YAML format
-
-The YAML file must include at least:
+A basic YAML topology contains:
 
 ```yaml
 lab_name: lab_name
-nodes:
-  node1:
-    type: host
+nodes: # defines the list of nodes in the simulation
+  node1:  # name of the node
+    type: host  # type of the devise, it can be "host" or "router"
     interfaces:
-      - network: lan_a
-        ip: 10.10.1.10/24
-    default_gateway: 10.10.1.1
+      - network: lan_a # name of the network
+        ip: 10.10.1.10/24 # ipv4 address
+    default_gateway: 10.10.1.1 # default gateway's IPv4 
 ```
 
+This generates a Kathara .startup file equal to:
+```
+ip address add 10.10.1.10/24 dev eth0
+ip route add default via 10.10.1.1
+```
+
+Example of a router:
+```yaml
+r1: # router's name
+  type: router # define the node as a router
+  interfaces: # configure interfaces
+    - network: lan_a # name of the first network
+      ip: 10.10.1.1/24 # ip addr of the network interface (this will be the eth0)
+    - network: r1_r2 # name of the second network
+      ip: 10.0.12.1/30 # ip addr of the network interface (this will be the eth1)
+  frr: # configuration of frr 
+    enabled: true
+    protocol: ospf
+    router_id: 1.1.1.1
+    area: 0
+```
 Each node requires:
 
 - `interfaces`: a list of interfaces
