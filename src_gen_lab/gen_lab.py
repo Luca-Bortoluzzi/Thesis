@@ -455,7 +455,19 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
     if is_frr_device(node_data):
         if lines and lines[-1] != "":
             lines.append("")
-        lines.append("systemctl start frr")
+        lines.extend([
+            "if command -v service >/dev/null 2>&1; then",
+            "    service frr start",
+            "elif command -v systemctl >/dev/null 2>&1; then",
+            "    systemctl start frr",
+            "elif [ -x /usr/lib/frr/frrinit.sh ]; then",
+            "    /usr/lib/frr/frrinit.sh start",
+            "elif [ -x /etc/init.d/frr ]; then",
+            "    /etc/init.d/frr start",
+            "else",
+            "    echo 'ERRORE: impossibile avviare FRR: service/systemctl/frrinit non disponibili' >&2",
+            "fi",
+        ])
 
     if node_data.get("commands"):
         if lines and lines[-1] != "":
@@ -509,7 +521,6 @@ def copy_node_directories(
     return imported
 
 
-
 def bash_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
@@ -551,56 +562,6 @@ def format_domain_summary(domain: dict[str, Any]) -> str:
         parts.append(label)
     return ", ".join(parts)
 
-
-def parse_network_selection(choice: str, domains: list[dict[str, Any]]) -> list[str] | None:
-    """Interpreta la scelta utente: 0, all, indici, nomi o lista mista."""
-    choice = choice.strip()
-    if choice in {"", "0"}:
-        return None
-
-    if choice.lower() in {"all", "tutte", "tutti", "*"}:
-        return [domain["name"] for domain in domains]
-
-    by_name = {domain["name"]: domain["name"] for domain in domains}
-    selected: list[str] = []
-
-    for raw_token in choice.replace(";", ",").split(","):
-        token = raw_token.strip()
-        if not token:
-            continue
-
-        if token.isdigit():
-            index = int(token)
-            if not (1 <= index <= len(domains)):
-                raise ValueError(f"Indice rete non valido: {token}")
-            selected.append(domains[index - 1]["name"])
-            continue
-
-        if token not in by_name:
-            raise ValueError(
-                f"Collision domain '{token}' non trovato. "
-                f"Reti disponibili: {', '.join(by_name.keys())}"
-            )
-        selected.append(token)
-
-    return unique_preserve_order(selected)
-
-def ask_yes_no(question: str, default: bool = False) -> bool:
-    """Legge una risposta sì/no da terminale."""
-    default_label = "S/n" if default else "s/N"
-    answer = input(f"{question} [{default_label}]: ").strip().lower()
-
-    if not answer:
-        return default
-
-    if answer in {"s", "si", "sì", "y", "yes"}:
-        return True
-
-    if answer in {"n", "no"}:
-        return False
-
-    print("Risposta non riconosciuta: considero 'no'.")
-    return False
 
 def normalize_wireshark_networks(value: Any) -> list[str]:
     """Normalizza reti/collision domain passati da YAML o CLI."""
@@ -786,6 +747,163 @@ def remove_legacy_wireshark_scripts(lab_dir: Path) -> None:
         if script_path.exists():
             script_path.unlink()
 
+
+
+# ---------------------------------------------------------------------------
+# zombies.txt manuale per simulazioni DoS/C2
+# ---------------------------------------------------------------------------
+
+
+def split_ip_tokens(value: str) -> list[str]:
+    """Divide IP separati da spazio, virgola, punto e virgola o newline."""
+    tokens: list[str] = []
+    for chunk in value.replace(";", ",").replace("\n", ",").split(","):
+        tokens.extend(part.strip() for part in chunk.split() if part.strip())
+    return tokens
+
+
+def normalize_ip(value: str) -> str:
+    """Valida un IP inserito dall'utente e rimuove eventuale prefisso CIDR."""
+    try:
+        if "/" in value:
+            return str(ipaddress.ip_interface(value).ip)
+        return str(ipaddress.ip_address(value))
+    except ValueError as exc:
+        raise ValueError(f"IP zombie non valido: {value}") from exc
+
+
+def parse_zombie_ips(value: str) -> list[str]:
+    """Restituisce IP validi, senza duplicati, mantenendo l'ordine di inserimento."""
+    ips: list[str] = []
+    for token in split_ip_tokens(value):
+        ip = normalize_ip(token)
+        if ip not in ips:
+            ips.append(ip)
+    return ips
+
+
+def default_c2_node(nodes: dict[str, Any]) -> str | None:
+    """Propone il nodo C2/attacker su cui montare zombies.txt."""
+    for node_name in nodes:
+        if "attacker" in node_name.lower():
+            return node_name
+    for node_name in nodes:
+        if "c2" in node_name.lower() or "master" in node_name.lower():
+            return node_name
+    return None
+
+
+def choose_c2_node(nodes: dict[str, Any], requested: str | None, interactive: bool) -> str:
+    """Sceglie il nodo in cui scrivere zombies.txt."""
+    if requested:
+        if requested not in nodes:
+            raise ValueError(
+                f"Nodo C2/attacker '{requested}' non trovato. "
+                f"Nodi disponibili: {', '.join(nodes.keys())}"
+            )
+        return requested
+
+    proposed = default_c2_node(nodes)
+    if interactive:
+        if proposed:
+            answer = input(f"Nodo C2/attacker per zombies.txt [{proposed}]: ").strip()
+            node_name = answer or proposed
+        else:
+            print("Nodi disponibili:")
+            for node_name in nodes:
+                print(f"  - {node_name}")
+            node_name = input("Nodo C2/attacker per zombies.txt: ").strip()
+
+        if not node_name:
+            raise ValueError("Nodo C2/attacker non indicato.")
+        if node_name not in nodes:
+            raise ValueError(
+                f"Nodo C2/attacker '{node_name}' non trovato. "
+                f"Nodi disponibili: {', '.join(nodes.keys())}"
+            )
+        return node_name
+
+    if proposed:
+        return proposed
+
+    raise ValueError(
+        "Impossibile scegliere automaticamente il nodo C2/attacker. "
+        "Usa --zombies-node <nome_nodo>."
+    )
+
+
+def ask_zombie_ips() -> list[str]:
+    """Chiede manualmente gli IP zombie all'utente."""
+    print("\nGenerazione manuale zombies.txt")
+    print("Inserisci gli IP degli zombie separati da spazio, virgola o punto e virgola.")
+    print("Puoi anche inserire un IP per riga; lascia una riga vuota per terminare.")
+
+    lines: list[str] = []
+    first = input("IP zombie: ").strip()
+    if not first:
+        return []
+    lines.append(first)
+
+    while True:
+        line = input("IP zombie aggiuntivo [INVIO per finire]: ").strip()
+        if not line:
+            break
+        lines.append(line)
+
+    return parse_zombie_ips("\n".join(lines))
+
+
+def write_manual_zombies_file(
+    lab_dir: Path,
+    nodes: dict[str, Any],
+    mode: str,
+    zombies_node: str | None,
+    zombies_ips_arg: str | None,
+) -> Path | None:
+    """Crea zombies.txt solo con IP inseriti manualmente dall'utente o da CLI.
+
+    Non estrae piu' automaticamente gli IP dai nodi del YAML.
+    """
+    if mode == "disabled":
+        return None
+
+    interactive = sys.stdin.isatty()
+
+    zombie_ips: list[str] = []
+    if zombies_ips_arg:
+        zombie_ips = parse_zombie_ips(zombies_ips_arg)
+    elif mode == "ask":
+        if not interactive:
+            return None
+        if not ask_yes_no("Vuoi generare manualmente il file zombies.txt?", default=False):
+            return None
+        zombie_ips = ask_zombie_ips()
+    elif mode == "manual":
+        if not interactive:
+            raise ValueError(
+                "--zombies manual richiede un terminale interattivo oppure --zombies-ips."
+            )
+        zombie_ips = ask_zombie_ips()
+    else:
+        raise ValueError(f"Modalita' zombies non valida: {mode}")
+
+    if not zombie_ips:
+        print("[Framework] zombies.txt non generato: nessun IP zombie inserito.")
+        return None
+
+    c2_node = choose_c2_node(nodes, zombies_node, interactive=interactive)
+    c2_dir = lab_dir / c2_node
+    c2_dir.mkdir(parents=True, exist_ok=True)
+
+    zombies_file_path = c2_dir / "zombies.txt"
+    zombies_file_path.write_text("\n".join(zombie_ips) + "\n", encoding="utf-8")
+
+    print(
+        f"[Framework] Generato manualmente zombies.txt con {len(zombie_ips)} IP "
+        f"per il nodo {c2_node}: {zombies_file_path}"
+    )
+    return zombies_file_path
+
 def generate_lab(
     config_path: Path,
     output_dir: Path,
@@ -794,6 +912,9 @@ def generate_lab(
     wireshark_networks: str | None,
     wireshark_mode: str,
     import_node_dirs: bool,
+    zombies_mode: str,
+    zombies_node: str | None,
+    zombies_ips: str | None,
 ) -> tuple[Path, list[str], bool, list[str]]:
     config = load_yaml(config_path)
     validate_config(config)
@@ -801,6 +922,13 @@ def generate_lab(
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
     selected_wireshark_networks = choose_wireshark_networks(config, wireshark_networks, wireshark_mode)
+
+    if selected_wireshark_networks and WIRESHARK_NODE_NAME in nodes:
+        raise ValueError(
+            f"Il YAML contiene già un nodo chiamato '{WIRESHARK_NODE_NAME}'. "
+            "Rinomina quel nodo oppure cambia WIRESHARK_NODE_NAME nel generatore, "
+            "altrimenti il lab.conf avrebbe definizioni duplicate."
+        )
 
     lab_dir = output_dir / lab_name
     prepare_lab_directory(lab_dir, clean=clean, force=force)
@@ -812,6 +940,16 @@ def generate_lab(
         lab_dir=lab_dir,
         nodes=nodes,
         enabled=import_node_dirs,
+    )
+
+    # Generazione opzionale e manuale di zombies.txt.
+    # Gli IP non vengono piu' estratti automaticamente dal YAML: li decide l'utente.
+    write_manual_zombies_file(
+        lab_dir=lab_dir,
+        nodes=nodes,
+        mode=zombies_mode,
+        zombies_node=zombies_node,
+        zombies_ips_arg=zombies_ips,
     )
 
     for node_name, node_data in nodes.items():
@@ -895,6 +1033,36 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+
+    parser.add_argument(
+        "--zombies",
+        choices=["ask", "manual", "disabled"],
+        default="ask",
+        help=(
+            "Gestione del file zombies.txt: "
+            "ask chiede se generarlo manualmente, manual forza l'inserimento manuale, "
+            "disabled non lo genera. Default: ask."
+        ),
+    )
+
+    parser.add_argument(
+        "--zombies-node",
+        default=None,
+        help=(
+            "Nodo C2/attacker in cui scrivere zombies.txt. "
+            "Se omesso, viene proposto il primo nodo con 'attacker' nel nome."
+        ),
+    )
+
+    parser.add_argument(
+        "--zombies-ips",
+        default=None,
+        help=(
+            "IP zombie da scrivere in zombies.txt, separati da virgola, spazio o punto e virgola. "
+            "Esempio: --zombies-ips '10.0.1.10,10.0.1.11'."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -911,6 +1079,9 @@ def main() -> int:
             wireshark_networks=args.wireshark_networks,
             wireshark_mode=args.wireshark,
             import_node_dirs=args.import_node_dirs,
+            zombies_mode=args.zombies,
+            zombies_node=args.zombies_node,
+            zombies_ips=args.zombies_ips,
         )
 
         print(f"[OK] Configurazione letta: {config_path}")
@@ -919,8 +1090,6 @@ def main() -> int:
         print("Per avviare:")
         print(f"  cd {lab_dir}")
         print("  kathara lstart")
-        print(" Oppure:")
-        print(f"  ./start.sh {lab_dir}")
         print("")
         print("Per pulire:")
         print("  kathara lclean")

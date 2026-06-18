@@ -1,0 +1,284 @@
+lab_name: dos_enterprise_lab
+
+description: >
+  Laboratorio Kathara esteso per simulazione controllata di attacco DoS.
+  La topologia rappresenta una rete aziendale multi-LAN con più host
+  legittimi, una rete attacker separata e una DMZ contenente il server
+  vittima. Il laboratorio è pensato per testare disponibilità, RTT,
+  perdita pacchetti e degradazione del servizio sotto traffico anomalo.
+
+metadata:
+  description: "Enterprise DoS simulation topology with multiple legitimate hosts"
+  version: 1.0
+  author: "Luca-Bortoluzzi"
+  email: "luca.bortoluzzi921@edu.unito.it"
+  web: "http://www.kathara.org/"
+
+nodes:
+
+  # =========================
+  # LAN A - utenti legittimi
+  # =========================
+
+  pc_a1:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.10/24
+    default_gateway: 10.10.1.1
+
+  pc_a2:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.11/24
+    default_gateway: 10.10.1.1
+
+  pc_a3:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.12/24
+    default_gateway: 10.10.1.1
+
+  pc_a4:
+    type: host
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.13/24
+    default_gateway: 10.10.1.1
+
+  # =========================
+  # LAN B - utenti legittimi
+  # =========================
+
+  pc_b1:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.10/24
+    default_gateway: 10.10.2.1
+
+  pc_b2:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.11/24
+    default_gateway: 10.10.2.1
+
+  pc_b3:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.12/24
+    default_gateway: 10.10.2.1
+
+  pc_b4:
+    type: host
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.13/24
+    default_gateway: 10.10.2.1
+
+  # =========================
+  # LAN C - utenti legittimi
+  # =========================
+
+  pc_c1:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.10/24
+    default_gateway: 10.10.3.1
+
+  pc_c2:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.11/24
+    default_gateway: 10.10.3.1
+
+  pc_c3:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.12/24
+    default_gateway: 10.10.3.1
+
+  pc_c4:
+    type: host
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.13/24
+    default_gateway: 10.10.3.1
+
+  # =========================
+  # LAN D - utenti legittimi
+  # =========================
+
+  pc_d1:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.10/24
+    default_gateway: 10.10.4.1
+
+  pc_d2:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.11/24
+    default_gateway: 10.10.4.1
+
+  pc_d3:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.12/24
+    default_gateway: 10.10.4.1
+
+  pc_d4:
+    type: host
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.13/24
+    default_gateway: 10.10.4.1
+
+  # =========================
+  # Rete attacker
+  # =========================
+
+  attacker:
+    type: host
+    interfaces:
+      - network: lan_attackers
+        ip: 10.20.1.10/24
+    default_gateway: 10.20.1.1
+
+  zombie_1:
+    type: host
+    interfaces:
+      - network: lan_attackers
+        ip: 10.20.1.11/24
+    default_gateway: 10.20.1.1
+
+  zombie_2:
+    type: host
+    interfaces:
+      - network: lan_attackers
+        ip: 10.20.1.12/24
+    default_gateway: 10.20.1.1
+
+  zombie_3:
+    type: host
+    interfaces:
+      - network: lan_attackers
+        ip: 10.20.1.13/24
+    default_gateway: 10.20.1.1
+
+  # =========================
+  # DMZ - server vittima
+  # =========================
+
+  server:
+    type: host
+    interfaces:
+      - network: dmz_servers
+        ip: 10.30.1.10/24
+    default_gateway: 10.30.1.1
+
+  monitor:
+    type: host
+    interfaces:
+      - network: dmz_servers
+        ip: 10.30.1.20/24
+    default_gateway: 10.30.1.1
+
+  # =========================
+  # Router aziendali
+  # =========================
+
+  r1:
+    type: router
+    interfaces:
+      - network: lan_a
+        ip: 10.10.1.1/24
+      - network: r1_r2
+        ip: 10.0.12.1/30
+      - network: r1_r3
+        ip: 10.0.13.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 1.1.1.1
+      area: 0
+
+  r2:
+    type: router
+    interfaces:
+      - network: lan_b
+        ip: 10.10.2.1/24
+      - network: r1_r2
+        ip: 10.0.12.2/30
+      - network: r2_r4
+        ip: 10.0.24.1/30
+      - network: r2_core
+        ip: 10.0.25.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 2.2.2.2
+      area: 0
+
+  r3:
+    type: router
+    interfaces:
+      - network: lan_c
+        ip: 10.10.3.1/24
+      - network: r1_r3
+        ip: 10.0.13.2/30
+      - network: r3_r4
+        ip: 10.0.34.1/30
+      - network: r3_core
+        ip: 10.0.35.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 3.3.3.3
+      area: 0
+
+  r4:
+    type: router
+    interfaces:
+      - network: lan_d
+        ip: 10.10.4.1/24
+      - network: r2_r4
+        ip: 10.0.24.2/30
+      - network: r3_r4
+        ip: 10.0.34.2/30
+      - network: r4_core
+        ip: 10.0.45.1/30
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 4.4.4.4
+      area: 0
+
+  core:
+    type: router
+    interfaces:
+      - network: r2_core
+        ip: 10.0.25.2/30
+      - network: r3_core
+        ip: 10.0.35.2/30
+      - network: r4_core
+        ip: 10.0.45.2/30
+      - network: dmz_servers
+        ip: 10.30.1.1/24
+      - network: lan_attackers
+        ip: 10.20.1.1/24
+    frr:
+      enabled: true
+      protocol: ospf
+      router_id: 5.5.5.5
+      area: 0

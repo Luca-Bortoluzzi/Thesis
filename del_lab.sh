@@ -7,16 +7,16 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-# Assegna il parametro a una variabile per chiarezza
+# Path della directory del laboratorio
 LAB_NAME=$1
 
 if [ "$LAB_NAME" = "all" ]; then
     echo "Remove all the labs..."
     # Rimuove tutto il contenuto dentro labs, ma mantiene la cartella 'labs' stessa
-    sudo rm -rf ./labs/
+    sudo rm -rf ./labs/*
 elif [ -d "$LAB_NAME" ]; then
     echo "Remove lab: $LAB_NAME..."
-    # Rimuove in modo sicuro senza fare il 'cd'
+    # Rimuove in modo sicuro
     sudo rm -rf "$LAB_NAME"
 else
     echo "Error: directory does not exist or command not right"
