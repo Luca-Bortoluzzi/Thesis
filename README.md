@@ -102,11 +102,14 @@ r1: # router's name
     - network: r1_r2 # name of the second network
       ip: 10.0.12.1/30 # ip addr of the network interface (this will be the eth1)
   frr: # configuration of frr 
-    enabled: true
-    protocol: ospf
-    router_id: 1.1.1.1
+    enabled: true # implement the zebra's daemon
+    protocol: ospf # define wich daemon put on (can be multiples daemons --> es. protocol: [ospf, bgp])
+    router_id: 1.1.1.1 # configure the daemon 
     area: 0
 ```
+
+
+
 Each node requires:
 
 - `interfaces`: a list of interfaces

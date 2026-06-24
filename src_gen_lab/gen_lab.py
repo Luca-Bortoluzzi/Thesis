@@ -456,17 +456,7 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
         if lines and lines[-1] != "":
             lines.append("")
         lines.extend([
-            "if command -v service >/dev/null 2>&1; then",
-            "    service frr start",
-            "elif command -v systemctl >/dev/null 2>&1; then",
-            "    systemctl start frr",
-            "elif [ -x /usr/lib/frr/frrinit.sh ]; then",
-            "    /usr/lib/frr/frrinit.sh start",
-            "elif [ -x /etc/init.d/frr ]; then",
-            "    /etc/init.d/frr start",
-            "else",
-            "    echo 'ERRORE: impossibile avviare FRR: service/systemctl/frrinit non disponibili' >&2",
-            "fi",
+            "systemctl start frr",
         ])
 
     if node_data.get("commands"):
@@ -731,6 +721,7 @@ def append_wireshark_to_lab_conf(lines: list[str], networks: list[str]) -> None:
     lines.append(f'{WIRESHARK_NODE_NAME}[bridged]=true')
     lines.append(f'{WIRESHARK_NODE_NAME}[port]="3000:3000/tcp"')
     lines.append(f'{WIRESHARK_NODE_NAME}[image]="{WIRESHARK_IMAGE}"')
+    lines.append(f'{WIRESHARK_NODE_NAME}[num_terms]=0')
     lines.append("")
 
 
@@ -872,12 +863,6 @@ def write_manual_zombies_file(
     zombie_ips: list[str] = []
     if zombies_ips_arg:
         zombie_ips = parse_zombie_ips(zombies_ips_arg)
-    elif mode == "ask":
-        if not interactive:
-            return None
-        if not ask_yes_no("Vuoi generare manualmente il file zombies.txt?", default=False):
-            return None
-        zombie_ips = ask_zombie_ips()
     elif mode == "manual":
         if not interactive:
             raise ValueError(
@@ -943,6 +928,7 @@ def generate_lab(
     )
 
     # Generazione opzionale e manuale di zombies.txt.
+    # Default: disattivata, senza domande a terminale.
     # Gli IP non vengono piu' estratti automaticamente dal YAML: li decide l'utente.
     write_manual_zombies_file(
         lab_dir=lab_dir,
@@ -1036,12 +1022,13 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--zombies",
-        choices=["ask", "manual", "disabled"],
-        default="ask",
+        choices=["manual", "disabled"],
+        default="disabled",
         help=(
             "Gestione del file zombies.txt: "
-            "ask chiede se generarlo manualmente, manual forza l'inserimento manuale, "
-            "disabled non lo genera. Default: ask."
+            "disabled non lo genera e non fa domande; "
+            "manual forza l'inserimento manuale oppure usa --zombies-ips. "
+            "Default: disabled."
         ),
     )
 

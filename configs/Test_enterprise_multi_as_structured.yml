@@ -348,19 +348,3 @@ nodes:
         - ospf
         ebgp_requires_policy: false
         network_import_check: false
-connection_tests:
-  enabled: true
-  scenario: realistic_multi_as_structured
-  clients:
-  - pc_a
-  - pc_b
-  - pc_c
-  - pc_d
-  - pc_e
-  - pc_f
-  target_node: server
-  target_ip: 10.40.10.10
-  port: 9000
-  attempts: 10
-  timeout: 2
-  delay: 1

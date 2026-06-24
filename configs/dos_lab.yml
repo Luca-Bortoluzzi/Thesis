@@ -81,70 +81,6 @@ nodes:
     default_gateway: 10.10.2.1
 
   # =========================
-  # LAN C - utenti legittimi
-  # =========================
-
-  pc_c1:
-    type: host
-    interfaces:
-      - network: lan_c
-        ip: 10.10.3.10/24
-    default_gateway: 10.10.3.1
-
-  pc_c2:
-    type: host
-    interfaces:
-      - network: lan_c
-        ip: 10.10.3.11/24
-    default_gateway: 10.10.3.1
-
-  pc_c3:
-    type: host
-    interfaces:
-      - network: lan_c
-        ip: 10.10.3.12/24
-    default_gateway: 10.10.3.1
-
-  pc_c4:
-    type: host
-    interfaces:
-      - network: lan_c
-        ip: 10.10.3.13/24
-    default_gateway: 10.10.3.1
-
-  # =========================
-  # LAN D - utenti legittimi
-  # =========================
-
-  pc_d1:
-    type: host
-    interfaces:
-      - network: lan_d
-        ip: 10.10.4.10/24
-    default_gateway: 10.10.4.1
-
-  pc_d2:
-    type: host
-    interfaces:
-      - network: lan_d
-        ip: 10.10.4.11/24
-    default_gateway: 10.10.4.1
-
-  pc_d3:
-    type: host
-    interfaces:
-      - network: lan_d
-        ip: 10.10.4.12/24
-    default_gateway: 10.10.4.1
-
-  pc_d4:
-    type: host
-    interfaces:
-      - network: lan_d
-        ip: 10.10.4.13/24
-    default_gateway: 10.10.4.1
-
-  # =========================
   # Rete attacker
   # =========================
 
@@ -161,6 +97,8 @@ nodes:
       - network: lan_attackers
         ip: 10.20.1.11/24
     default_gateway: 10.20.1.1
+    commands:
+      - python3 /hostlab/zombie.py > /tmp/zombie.log 2>&1 &
 
   zombie_2:
     type: host
@@ -168,6 +106,8 @@ nodes:
       - network: lan_attackers
         ip: 10.20.1.12/24
     default_gateway: 10.20.1.1
+    commands:
+      - python3 /hostlab/zombie.py > /tmp/zombie.log 2>&1 &
 
   zombie_3:
     type: host
@@ -175,6 +115,8 @@ nodes:
       - network: lan_attackers
         ip: 10.20.1.13/24
     default_gateway: 10.20.1.1
+    commands:
+      - python3 /hostlab/zombie.py > /tmp/zombie.log 2>&1 &
 
   # =========================
   # DMZ - server vittima
@@ -186,13 +128,8 @@ nodes:
       - network: dmz_servers
         ip: 10.30.1.10/24
     default_gateway: 10.30.1.1
-
-  monitor:
-    type: host
-    interfaces:
-      - network: dmz_servers
-        ip: 10.30.1.20/24
-    default_gateway: 10.30.1.1
+    commands:
+      - SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 python3 /hostlab/service.py > /tmp/service.log 2>&1 &
 
   # =========================
   # Router aziendali
@@ -233,8 +170,6 @@ nodes:
   r3:
     type: router
     interfaces:
-      - network: lan_c
-        ip: 10.10.3.1/24
       - network: r1_r3
         ip: 10.0.13.2/30
       - network: r3_r4
@@ -250,8 +185,6 @@ nodes:
   r4:
     type: router
     interfaces:
-      - network: lan_d
-        ip: 10.10.4.1/24
       - network: r2_r4
         ip: 10.0.24.2/30
       - network: r3_r4

