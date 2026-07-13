@@ -468,6 +468,35 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def candidate_import_directories(config_path: Path) -> list[Path]:
+    config_dir = config_path.parent
+    return [
+        path
+        for path in sorted(config_dir.iterdir(), key=lambda item: item.name.lower())
+        if path.is_dir()
+        and path.name not in {"__pycache__"}
+        and not path.name.startswith(".")
+    ]
+
+
+def validate_import_directories(config_path: Path, nodes: dict[str, Any], enabled: bool) -> None:
+    if not enabled:
+        return
+
+    node_names = set(nodes)
+    invalid_dirs = [
+        path.name
+        for path in candidate_import_directories(config_path)
+        if path.name not in node_names
+    ]
+    if invalid_dirs:
+        raise ValueError(
+            "Cartelle da importare senza nodo corrispondente nel laboratorio: "
+            + ", ".join(invalid_dirs)
+            + ". Rinomina/rimuovi la cartella oppure aggiungi un nodo con lo stesso nome nel YAML."
+        )
+
+
 def copy_node_directories(
     config_path: Path,
     lab_dir: Path,
@@ -483,6 +512,8 @@ def copy_node_directories(
     """
     if not enabled:
         return []
+
+    validate_import_directories(config_path, nodes, enabled=True)
 
     config_dir = config_path.parent
     imported: list[str] = []
@@ -896,7 +927,7 @@ def generate_lab(
     force: bool,
     wireshark_networks: str | None,
     wireshark_mode: str,
-    import_node_dirs: bool,
+    import_dirs: bool,
     zombies_mode: str,
     zombies_node: str | None,
     zombies_ips: str | None,
@@ -906,6 +937,7 @@ def generate_lab(
 
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
+    validate_import_directories(config_path, nodes, enabled=import_dirs)
     selected_wireshark_networks = choose_wireshark_networks(config, wireshark_networks, wireshark_mode)
 
     if selected_wireshark_networks and WIRESHARK_NODE_NAME in nodes:
@@ -924,7 +956,7 @@ def generate_lab(
         config_path=config_path,
         lab_dir=lab_dir,
         nodes=nodes,
-        enabled=import_node_dirs,
+        enabled=import_dirs,
     )
 
     # Generazione opzionale e manuale di zombies.txt.
@@ -1011,7 +1043,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--import-node-dirs",
+        "--import-dirs",
         action="store_true",
         help=(
             "Importa nel laboratorio generato le cartelle dei nodi presenti accanto al file YAML. "
@@ -1065,7 +1097,7 @@ def main() -> int:
             force=args.force,
             wireshark_networks=args.wireshark_networks,
             wireshark_mode=args.wireshark,
-            import_node_dirs=args.import_node_dirs,
+            import_dirs=args.import_dirs,
             zombies_mode=args.zombies,
             zombies_node=args.zombies_node,
             zombies_ips=args.zombies_ips,
@@ -1075,10 +1107,15 @@ def main() -> int:
         print(f"[OK] Laboratorio generato: {lab_dir}")
         print("")
         print("Per avviare:")
+        print(f"  ./start.sh {lab_dir}")
+        print("Oppure:")
         print(f"  cd {lab_dir}")
         print("  kathara lstart")
         print("")
-        print("Per pulire:")
+        print("Per fermare:")
+        print(f"  ./stop.sh {lab_dir}")
+        print("Oppure:")
+        print(f"  cd {lab_dir}")
         print("  kathara lclean")
         print("")
 
