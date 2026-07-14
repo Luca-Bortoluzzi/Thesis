@@ -1,6 +1,6 @@
 lab_name: Test1_multi_area
 
-description: Primo test OSPF multi-area con server accessibile via nc
+description: Initial multi-area OSPF test with a server reachable through nc
 
 metadata:
   description: "Testing connections with a server using multi-area OSPF"

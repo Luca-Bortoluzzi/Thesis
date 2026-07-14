@@ -2,14 +2,14 @@
 """
 run_connection_tests.py
 
-Esegue test di raggiungibilita' TCP dai client Kathara verso un servizio.
-I client vengono eseguiti in parallelo per ogni tentativo, cosi' la simulazione
-riproduce piu' host legittimi che provano a connettersi simultaneamente.
+Measures ICMP RTT, TCP handshake time, and application response time from
+Kathara clients. Clients run in parallel for every round to model legitimate
+hosts attempting connections simultaneously.
 
-Uso interattivo:
+Interactive usage:
     ./run_connection_tests.py
 
-Uso non interattivo:
+Non-interactive usage:
     ./run_connection_tests.py --lab Test1 --target server --port 9000 \
         --scenario baseline --attempts 10 --timeout 2 --delay 1 --non-interactive
 
@@ -22,8 +22,10 @@ Output:
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import ipaddress
+import json
 import re
 import shlex
 import subprocess
@@ -60,7 +62,7 @@ def now_run_id() -> str:
 
 
 def now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 def prompt_value(label: str, default: str | None = None, required: bool = False) -> str:
@@ -72,13 +74,13 @@ def prompt_value(label: str, default: str | None = None, required: bool = False)
         value = raw if raw else (default or "")
         if value or not required:
             return value
-        print("Valore obbligatorio.")
+        print("A value is required.")
 
 
 def parse_clients(value: str) -> list[str]:
     clients = [part.strip() for part in re.split(r"[,\s]+", value.strip()) if part.strip()]
     if not clients:
-        raise ValueError("Devi indicare almeno un client, ad esempio: pc_a,pc_b,pc_c")
+        raise ValueError("Specify at least one client, for example: pc_a,pc_b,pc_c")
     return clients
 
 
@@ -86,9 +88,9 @@ def parse_int(value: str, label: str, minimum: int = 1) -> int:
     try:
         number = int(value)
     except ValueError as exc:
-        raise ValueError(f"{label} deve essere un numero intero.") from exc
+        raise ValueError(f"{label} must be an integer.") from exc
     if number < minimum:
-        raise ValueError(f"{label} deve essere >= {minimum}.")
+        raise ValueError(f"{label} must be >= {minimum}.")
     return number
 
 
@@ -96,9 +98,9 @@ def parse_float(value: str, label: str, minimum: float = 0.0) -> float:
     try:
         number = float(value)
     except ValueError as exc:
-        raise ValueError(f"{label} deve essere un numero.") from exc
+        raise ValueError(f"{label} must be a number.") from exc
     if number < minimum:
-        raise ValueError(f"{label} deve essere >= {minimum}.")
+        raise ValueError(f"{label} must be >= {minimum}.")
     return number
 
 
@@ -119,7 +121,7 @@ def list_docker_containers() -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Impossibile leggere i container Docker: {result.stderr.strip()}")
+        raise RuntimeError(f"Unable to list Docker containers: {result.stderr.strip()}")
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -180,23 +182,23 @@ def infer_project_dir(cwd: Path) -> Path:
 
 def choose_lab_interactively(labs: list[Path]) -> Path:
     if len(labs) == 1:
-        print(f"[INFO] Uso laboratorio rilevato: {labs[0].name}")
+        print(f"[INFO] Using detected lab: {labs[0].name}")
         return labs[0]
 
-    print("Laboratori disponibili in ./labs:")
+    print("Labs available in ./labs:")
     for index, lab in enumerate(labs, start=1):
         print(f"  {index}) {lab.name}")
 
     while True:
-        raw = input(f"Scegli laboratorio [1-{len(labs)}]: ").strip()
+        raw = input(f"Select a lab [1-{len(labs)}]: ").strip()
         try:
             choice = int(raw)
         except ValueError:
-            print("Scelta non valida.")
+            print("Invalid selection.")
             continue
         if 1 <= choice <= len(labs):
             return labs[choice - 1]
-        print("Scelta fuori intervallo.")
+        print("Selection out of range.")
 
 
 def resolve_lab_context(args: argparse.Namespace, interactive: bool) -> LabContext:
@@ -212,7 +214,7 @@ def resolve_lab_context(args: argparse.Namespace, interactive: bool) -> LabConte
             else:
                 candidate = (project_dir / "labs" / args.lab).resolve()
         if not candidate.exists() or not (candidate / "lab.conf").exists():
-            raise ValueError(f"Laboratorio non trovato o non valido: {candidate}")
+            raise ValueError(f"Lab not found or invalid: {candidate}")
         return LabContext(project_dir=project_dir, lab_dir=candidate)
 
     if current:
@@ -226,7 +228,7 @@ def resolve_lab_context(args: argparse.Namespace, interactive: bool) -> LabConte
     if interactive:
         return LabContext(project_dir=project_dir, lab_dir=choose_lab_interactively(labs))
 
-    raise ValueError("Sono presenti piu' laboratori in ./labs: usa --lab <nome_lab>.")
+    raise ValueError("Multiple labs exist in ./labs: use --lab <lab_name>.")
 
 
 def default_clients_from_docker() -> str:
@@ -270,16 +272,16 @@ def resolve_target(target: str, lab_dir: Path | None) -> str:
         startup_path = lab_dir / f"{target}.startup"
         ip_addr = read_ip_from_startup(startup_path)
         if ip_addr:
-            print(f"[INFO] Target '{target}' risolto da {startup_path}: {ip_addr}")
+            print(f"[INFO] Target '{target}' resolved from {startup_path}: {ip_addr}")
             return ip_addr
         raise ValueError(
-            f"Target '{target}' non risolto. File non trovato o senza IP: {startup_path}. "
-            "Usa un IP oppure seleziona il laboratorio corretto con --lab."
+            f"Target '{target}' could not be resolved. File missing or without an IP: {startup_path}. "
+            "Use an IP address or select the correct lab with --lab."
         )
 
     raise ValueError(
-        f"Target '{target}' non e' un IP e non e' stato possibile determinare il laboratorio. "
-        "Esegui lo script dentro labs/<nome_lab>/ oppure usa --lab <nome_lab>."
+        f"Target '{target}' is not an IP address and the lab could not be determined. "
+        "Run the script inside labs/<lab_name>/ or use --lab <lab_name>."
     )
 
 
@@ -299,63 +301,184 @@ def write_log(log_path: Path, message: str, also_stdout: bool = True) -> None:
         print(message)
 
 
-def run_tcp_connect_test(container: str, target: str, port: int, timeout: int) -> tuple[int, str]:
-    """
-    Apre una connessione TCP verso il servizio, invia '1\n' e considera riuscito
-    il test solo se la risposta contiene 'pong'. In questo modo una connessione
-    accettata ma non servita correttamente viene classificata come FAIL.
-    """
-    shell_script = r'''
-response=$(printf '1\n' | timeout "$TIMEOUT" nc -w "$TIMEOUT" "$TARGET" "$PORT" 2>&1)
-printf '%s\n' "$response"
-printf '%s' "$response" | grep -q 'pong'
-'''.strip()
+CONTAINER_MEASUREMENT_SCRIPT = r'''
+import json
+import re
+import socket
+import subprocess
+import sys
+import time
 
-    command = [
-        "docker", "exec",
-        "-e", f"TARGET={target}",
-        "-e", f"PORT={port}",
-        "-e", f"TIMEOUT={timeout}",
-        container,
-        "sh", "-lc", shell_script,
-    ]
-    completed = subprocess.run(
-        command,
+target = sys.argv[1]
+port = int(sys.argv[2])
+timeout = float(sys.argv[3])
+result = {
+    "icmp_status": "FAIL",
+    "icmp_rtt_ms": None,
+    "icmp_error": "not_executed",
+    "tcp_status": "FAIL",
+    "tcp_connect_ms": None,
+    "tcp_error": "not_executed",
+    "application_status": "FAIL",
+    "application_response_ms": None,
+    "request_completion_ms": None,
+    "application_error": "not_executed",
+}
+
+# ping measures ICMP RTT in the Kathara client network namespace.
+try:
+    ping = subprocess.run(
+        ["ping", "-n", "-c", "1", "-W", str(max(1, int(timeout))), target],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        timeout=timeout + 1,
         check=False,
     )
-    return completed.returncode, completed.stdout or ""
+    ping_output = ping.stdout or ""
+    match = re.search(r"time[=<]\s*([0-9.]+)\s*ms", ping_output)
+    if ping.returncode == 0 and match:
+        result["icmp_status"] = "OK"
+        result["icmp_rtt_ms"] = round(float(match.group(1)), 3)
+        result["icmp_error"] = ""
+    elif "100% packet loss" in ping_output or "0 received" in ping_output:
+        result["icmp_error"] = "icmp_timeout"
+    else:
+        result["icmp_error"] = "icmp_unreachable_or_failed"
+except FileNotFoundError:
+    result["icmp_error"] = "ping_not_available"
+except subprocess.TimeoutExpired:
+    result["icmp_error"] = "icmp_timeout"
+except Exception as exc:
+    result["icmp_error"] = "icmp_internal_error:" + type(exc).__name__
+
+# Connection and response timings are collected directly in the client.
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(timeout)
+request_started = time.perf_counter()
+try:
+    connect_started = time.perf_counter()
+    sock.connect((target, port))
+    result["tcp_connect_ms"] = round((time.perf_counter() - connect_started) * 1000, 3)
+    result["tcp_status"] = "OK"
+    result["tcp_error"] = ""
+
+    application_started = time.perf_counter()
+    sock.sendall(b"1\n")
+    response = bytearray()
+    while b"pong" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        response.extend(chunk)
+    if b"pong" in response:
+        completed = time.perf_counter()
+        result["application_status"] = "OK"
+        result["application_response_ms"] = round((completed - application_started) * 1000, 3)
+        result["request_completion_ms"] = round((completed - request_started) * 1000, 3)
+        result["application_error"] = ""
+    else:
+        result["application_error"] = "pong_not_received"
+except socket.timeout:
+    if result["tcp_status"] == "OK":
+        result["application_error"] = "application_timeout"
+    else:
+        result["tcp_error"] = "tcp_connect_timeout"
+        result["application_error"] = "tcp_connect_timeout"
+except OSError as exc:
+    error = "socket_error:" + (str(exc.errno) if exc.errno is not None else type(exc).__name__)
+    if result["tcp_status"] == "OK":
+        result["application_error"] = error
+    else:
+        result["tcp_error"] = error
+        result["application_error"] = error
+except Exception as exc:
+    result["application_error"] = "internal_error:" + type(exc).__name__
+finally:
+    sock.close()
+
+print(json.dumps(result, separators=(",", ":")))
+'''.strip()
 
 
-def run_one_attempt(client: str, container: str, attempt: int, config: TestConfig) -> dict[str, str]:
+def run_container_measurements(container: str, target: str, port: int, timeout: int) -> tuple[dict[str, object], str]:
+    """Runs all measurements in the client, excluding host-side orchestration overhead."""
+    encoded_script = base64.b64encode(CONTAINER_MEASUREMENT_SCRIPT.encode("utf-8")).decode("ascii")
+    launcher = "import base64;exec(base64.b64decode('" + encoded_script + "'))"
+    command = [
+        "docker", "exec", container, "python3", "-c", launcher,
+        target, str(port), str(timeout),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=(timeout * 3) + 5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        raise RuntimeError("docker_exec_timeout") from exc
+
+    output = completed.stdout or ""
+    if completed.returncode != 0:
+        raise RuntimeError(f"container_measurement_failed:{output.strip() or completed.returncode}")
+    try:
+        payload = json.loads(output.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid_measurement_output:{output.strip()}") from exc
+    return payload, output.strip()
+
+
+def run_one_attempt(
+    client: str,
+    container: str,
+    request_index: int,
+    config: TestConfig,
+    experiment_started_at: str,
+    experiment_started_perf: float,
+) -> dict[str, str]:
     start = time.perf_counter()
-    return_code, output = run_tcp_connect_test(
+    measurements, output = run_container_measurements(
         container=container,
         target=config.target_resolved,
         port=config.port,
         timeout=config.timeout,
     )
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    host_command_completion_ms = (time.perf_counter() - start) * 1000
+    status = str(measurements["application_status"])
+    error = str(measurements["application_error"])
 
-    status = "OK" if return_code == 0 else "FAIL"
-    error = "" if return_code == 0 else "tcp_connection_failed_or_timeout"
+    def value(name: str) -> str:
+        raw = measurements.get(name)
+        return "" if raw is None else str(raw)
 
     return {
         "timestamp": now_iso(),
+        "experiment_started_at": experiment_started_at,
+        "experiment_elapsed_ms": f"{(time.perf_counter() - experiment_started_perf) * 1000:.2f}",
         "scenario": config.scenario,
         "client": client,
-        "attempt": str(attempt),
-        "packet_number": str(attempt),
+        "request_index": str(request_index),
         "target_input": config.target_input,
         "target": config.target_resolved,
         "port": str(config.port),
         "status": status,
-        "elapsed_ms": f"{elapsed_ms:.2f}",
+        "icmp_status": value("icmp_status"),
+        "icmp_rtt_ms": value("icmp_rtt_ms"),
+        "icmp_error": value("icmp_error"),
+        "tcp_status": value("tcp_status"),
+        "tcp_connect_ms": value("tcp_connect_ms"),
+        "tcp_error": value("tcp_error"),
+        "application_status": value("application_status"),
+        "application_response_ms": value("application_response_ms"),
+        "request_completion_ms": value("request_completion_ms"),
+        "host_command_completion_ms": f"{host_command_completion_ms:.2f}",
+        "application_error": error,
         "error": error,
-        "response_file": "",
-        "debug_output": output.strip(),
+        "debug_output": output,
     }
 
 
@@ -371,26 +494,26 @@ def build_config(args: argparse.Namespace, context: LabContext) -> TestConfig:
     delay_value = str(args.delay) if args.delay is not None else "1"
 
     if interactive:
-        print("Configurazione test connessioni TCP")
-        print("Il test verifica solo se i client riescono a connettersi al server.")
-        print("Per ogni tentativo, tutti i client vengono eseguiti simultaneamente.")
-        print("Premi INVIO per accettare il valore predefinito, quando presente.\n")
+        print("Network and application measurement configuration")
+        print("The test measures ICMP RTT, TCP connection time, and application response time inside each client.")
+        print("All clients run simultaneously for each round.")
+        print("Press ENTER to accept a displayed default value.\n")
 
         if context.lab_dir:
-            print(f"[INFO] Laboratorio selezionato: {context.lab_dir.name}")
+            print(f"[INFO] Selected lab: {context.lab_dir.name}")
 
-        target_input = prompt_value("IP/host server target", target_input, required=True)
-        port_value = prompt_value("Porta TCP servizio", port_value or "9000", required=True)
+        target_input = prompt_value("Target server IP/host", target_input, required=True)
+        port_value = prompt_value("Service TCP port", port_value or "9000", required=True)
 
         clients_default = clients_value or default_clients_from_lab(context.lab_dir)
         if clients_default:
-            print(f"Client rilevati automaticamente: {clients_default}")
-        clients_value = prompt_value("Client Kathara da usare", clients_default, required=True)
+            print(f"Automatically detected clients: {clients_default}")
+        clients_value = prompt_value("Kathara clients to use", clients_default, required=True)
 
         scenario = prompt_value("Scenario", scenario or "baseline", required=True)
-        attempts_value = prompt_value("Tentativi simultanei per client", attempts_value or "10", required=True)
-        timeout_value = prompt_value("Timeout secondi", timeout_value or "3", required=True)
-        delay_value = prompt_value("Delay tra round simultanei", delay_value or "1", required=True)
+        attempts_value = prompt_value("Simultaneous rounds per client", attempts_value or "10", required=True)
+        timeout_value = prompt_value("Timeout in seconds", timeout_value or "3", required=True)
+        delay_value = prompt_value("Delay between simultaneous rounds", delay_value or "1", required=True)
     else:
         missing = []
         if not target_input:
@@ -402,20 +525,20 @@ def build_config(args: argparse.Namespace, context: LabContext) -> TestConfig:
         if not clients_value:
             missing.append("--clients")
         if missing:
-            raise ValueError("In modalita' --non-interactive mancano: " + ", ".join(missing))
+            raise ValueError("Missing in --non-interactive mode: " + ", ".join(missing))
 
     if target_input is None or not target_input.strip():
-        raise ValueError("Target mancante.")
+        raise ValueError("Missing target.")
 
     target_resolved = resolve_target(target_input, context.lab_dir)
 
     return TestConfig(
         target_input=target_input.strip(),
         target_resolved=target_resolved,
-        port=parse_int(port_value, "Porta", minimum=1),
+        port=parse_int(port_value, "Port", minimum=1),
         clients=parse_clients(clients_value),
         scenario=scenario.strip() or "baseline",
-        attempts=parse_int(attempts_value, "Tentativi", minimum=1),
+        attempts=parse_int(attempts_value, "Attempts", minimum=1),
         timeout=parse_int(timeout_value, "Timeout", minimum=1),
         delay=parse_float(delay_value, "Delay", minimum=0.0),
         lab_dir=context.lab_dir,
@@ -428,22 +551,24 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
     logs_dir = output_dir / "logs"
     results_dir.mkdir(exist_ok=True)
     logs_dir.mkdir(exist_ok=True)
-
     csv_path = results_dir / f"connection_results_{config.scenario}_{run_id}.csv"
     main_log = logs_dir / f"connection_tests_{config.scenario}_{run_id}.log"
 
     write_log(main_log, f"[INFO] Output dir: {output_dir}")
     if config.lab_dir:
-        write_log(main_log, f"[INFO] Lab selezionato: {config.lab_dir}")
+        write_log(main_log, f"[INFO] Selected lab: {config.lab_dir}")
     write_log(main_log, f"[INFO] Scenario: {config.scenario}")
     write_log(main_log, f"[INFO] Target input: {config.target_input}")
-    write_log(main_log, f"[INFO] Target risolto: {config.target_resolved}:{config.port}")
+    write_log(main_log, f"[INFO] Resolved target: {config.target_resolved}:{config.port}")
     write_log(main_log, f"[INFO] Client: {' '.join(config.clients)}")
-    write_log(main_log, f"[INFO] Tentativi simultanei per client: {config.attempts}")
+    write_log(main_log, f"[INFO] Simultaneous rounds per client: {config.attempts}")
     write_log(main_log, f"[INFO] Timeout: {config.timeout}s")
-    write_log(main_log, f"[INFO] Delay tra round: {config.delay}s")
+    write_log(main_log, f"[INFO] Delay between rounds: {config.delay}s")
     write_log(main_log, f"[INFO] Output CSV: {csv_path}")
     write_log(main_log, "")
+
+    experiment_started_at = now_iso()
+    experiment_started_perf = time.perf_counter()
 
     containers = list_docker_containers()
     client_to_container: dict[str, str] = {}
@@ -451,21 +576,24 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
         container = find_kathara_container(client, containers)
         client_log = logs_dir / f"{client}_{config.scenario}_{run_id}.log"
         if not container:
-            message = f"[ERRORE] Container non trovato per nodo: {client}"
+            message = f"[ERROR] Container not found for node: {client}"
             write_log(main_log, message)
             write_log(client_log, message, also_stdout=False)
             continue
         client_to_container[client] = container
-        write_log(main_log, f"[OK] Nodo {client} -> container {container}")
-        write_log(client_log, f"[OK] Nodo {client} -> container {container}", also_stdout=False)
+        write_log(main_log, f"[OK] Node {client} -> container {container}")
+        write_log(client_log, f"[OK] Node {client} -> container {container}", also_stdout=False)
 
     if not client_to_container:
-        raise ValueError("Nessun container client valido trovato.")
+        raise ValueError("No valid client containers were found.")
 
     fieldnames = [
-        "timestamp", "scenario", "client", "attempt", "packet_number",
-        "target_input", "target", "port", "status", "elapsed_ms", "error",
-        "response_file",
+        "timestamp", "experiment_started_at", "experiment_elapsed_ms",
+        "scenario", "client", "request_index", "target_input", "target", "port",
+        "status", "icmp_status", "icmp_rtt_ms", "icmp_error",
+        "tcp_status", "tcp_connect_ms", "tcp_error",
+        "application_status", "application_response_ms", "request_completion_ms",
+        "host_command_completion_ms", "application_error", "error",
     ]
 
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -473,11 +601,19 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
         writer.writeheader()
 
         for attempt in range(1, config.attempts + 1):
-            write_log(main_log, f"[ROUND {attempt}/{config.attempts}] Avvio connessioni simultanee")
+            write_log(main_log, f"[ROUND {attempt}/{config.attempts}] Starting simultaneous connections")
             rows: list[dict[str, str]] = []
             with ThreadPoolExecutor(max_workers=len(client_to_container)) as executor:
                 future_map = {
-                    executor.submit(run_one_attempt, client, container, attempt, config): client
+                    executor.submit(
+                        run_one_attempt,
+                        client,
+                        container,
+                        attempt,
+                        config,
+                        experiment_started_at,
+                        experiment_started_perf,
+                    ): client
                     for client, container in client_to_container.items()
                 }
                 for future in as_completed(future_map):
@@ -488,25 +624,41 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
                     except Exception as exc:
                         row = {
                             "timestamp": now_iso(),
+                            "experiment_started_at": experiment_started_at,
+                            "experiment_elapsed_ms": f"{(time.perf_counter() - experiment_started_perf) * 1000:.2f}",
                             "scenario": config.scenario,
                             "client": client,
-                            "attempt": str(attempt),
-                            "packet_number": str(attempt),
+                            "request_index": str(attempt),
                             "target_input": config.target_input,
                             "target": config.target_resolved,
                             "port": str(config.port),
                             "status": "FAIL",
-                            "elapsed_ms": "0.00",
+                            "icmp_status": "FAIL",
+                            "icmp_rtt_ms": "",
+                            "icmp_error": "measurement_not_completed",
+                            "tcp_status": "FAIL",
+                            "tcp_connect_ms": "",
+                            "tcp_error": "measurement_not_completed",
+                            "application_status": "FAIL",
+                            "application_response_ms": "",
+                            "request_completion_ms": "",
+                            "host_command_completion_ms": "",
+                            "application_error": f"internal_error:{exc}",
                             "error": f"internal_error:{exc}",
-                            "response_file": "",
                             "debug_output": "",
                         }
                     rows.append(row)
-                    line = f"[{client}][{attempt}/{config.attempts}] {row['status']},{row['elapsed_ms']},{row['error']}"
+                    line = (
+                        f"[{client}][{attempt}/{config.attempts}] {row['status']} "
+                        f"icmp={row['icmp_rtt_ms'] or 'N/D'}ms "
+                        f"tcp={row['tcp_connect_ms'] or 'N/D'}ms "
+                        f"app={row['application_response_ms'] or 'N/D'}ms "
+                        f"error={row['error']}"
+                    )
                     write_log(main_log, line)
                     write_log(client_log, line, also_stdout=False)
                     if row.get("debug_output"):
-                        write_log(client_log, f"[DEBUG] nc output: {row['debug_output']}", also_stdout=False)
+                        write_log(client_log, f"[DEBUG] measurement output: {row['debug_output']}", also_stdout=False)
 
             for row in sorted(rows, key=lambda item: item["client"]):
                 row_for_csv = {key: row.get(key, "") for key in fieldnames}
@@ -517,28 +669,28 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
                 time.sleep(config.delay)
 
     write_log(main_log, "")
-    write_log(main_log, "[OK] Test terminati.")
+    write_log(main_log, "[OK] Tests completed.")
     write_log(main_log, f"[OK] CSV: {csv_path}")
-    write_log(main_log, f"[OK] Log principale: {main_log}")
+    write_log(main_log, f"[OK] Main log: {main_log}")
     return csv_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Verifica connessioni TCP simultanee dai nodi Kathara verso un servizio."
+        description="Measure ICMP RTT, TCP connection time, and application response time from Kathara nodes."
     )
-    parser.add_argument("--lab", help="Nome laboratorio in ./labs oppure percorso del laboratorio")
-    parser.add_argument("--target", help="IP o nome nodo del server target, ad esempio 10.0.20.10 oppure server")
-    parser.add_argument("--port", type=int, help="Porta TCP del servizio, ad esempio 9000")
+    parser.add_argument("--lab", help="Lab name in ./labs or a lab path")
+    parser.add_argument("--target", help="Target server IP or node name, for example 10.0.20.10 or server")
+    parser.add_argument("--port", type=int, help="Service TCP port, for example 9000")
     parser.add_argument(
         "--clients",
-        help="Client Kathara separati da virgola o spazio. Se omesso, rileva automaticamente pc_*.",
+        help="Kathara clients separated by commas or spaces. If omitted, pc_* nodes are detected automatically.",
     )
-    parser.add_argument("--scenario", default="baseline", help="Nome scenario, es. baseline o dos")
-    parser.add_argument("--attempts", type=int, default=10, help="Numero di round simultanei")
-    parser.add_argument("--timeout", type=int, default=3, help="Timeout nc in secondi")
-    parser.add_argument("--delay", type=float, default=1.0, help="Pausa tra round simultanei")
-    parser.add_argument("--non-interactive", action="store_true", help="Non fare domande; richiede almeno target e port")
+    parser.add_argument("--scenario", default="baseline", help="Scenario name, e.g. baseline or dos")
+    parser.add_argument("--attempts", type=int, default=10, help="Number of simultaneous rounds")
+    parser.add_argument("--timeout", type=int, default=3, help="Timeout for each measurement in seconds")
+    parser.add_argument("--delay", type=float, default=1.0, help="Pause between simultaneous rounds")
+    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; requires at least target and port")
     return parser.parse_args()
 
 
@@ -551,16 +703,16 @@ def main() -> int:
         output_dir = Path.cwd()
         csv_path = run_tests(config, output_dir)
         print("")
-        print("Per visualizzare il riepilogo:")
+        print("To display the report:")
         print(f"  ./show_connection_results.py {shlex.quote(str(csv_path))}")
-        print("Per generare anche il grafico RTT:")
+        print("To generate the metric plots as well:")
         print(f"  ./show_connection_results.py {shlex.quote(str(csv_path))} --plot")
         return 0
     except KeyboardInterrupt:
-        print("\n[INTERRUZIONE] Test interrotto dall'utente.", file=sys.stderr)
+        print("\n[INTERRUPTED] Test interrupted by the user.", file=sys.stderr)
         return 130
     except Exception as exc:
-        print(f"[ERRORE] {exc}", file=sys.stderr)
+        print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
 
 

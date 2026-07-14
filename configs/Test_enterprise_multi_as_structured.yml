@@ -1,5 +1,5 @@
 lab_name: Test_enterprise_multi_as_import_dirs
-description: Ambiente realistico multi-AS; server trattato come host, senza services
+description: Realistic multi-AS environment; the server is modeled as a host without services
   YAML
 metadata:
   description: Enterprise-style topology with OSPF stub areas, RIP domains and inter-AS

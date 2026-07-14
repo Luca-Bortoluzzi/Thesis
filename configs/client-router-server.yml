@@ -1,6 +1,6 @@
 lab_name: client-router-server
 
-description: semplice topologia con LAN e DMZ 
+description: Simple topology with a LAN and DMZ
 
 metadata:
   description: "Multi-AS BGP topology"

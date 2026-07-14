@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-zombies_stop.py - ferma il carico sugli zombie del laboratorio Kathara.
+zombies_stop.py - stops the load on Kathara lab zombies.
 
-Uso nel container attacker:
+Usage inside the attacker container:
   python3 /hostlab/attacker/zombies_stop.py
 """
 import os
@@ -39,23 +39,23 @@ def send_stop(zombie_ip: str) -> None:
                 reply = sock.recv(1024).decode(errors="ignore").strip()
             except OSError:
                 reply = ""
-        print(f"[OK] Zombie {zombie_ip}: stop inviato" + (f" - {reply}" if reply else ""))
+        print(f"[OK] Zombie {zombie_ip}: stop sent" + (f" - {reply}" if reply else ""))
     except Exception as exc:
-        print(f"[ERRORE] Zombie {zombie_ip} non raggiungibile su porta {ZOMBIE_PORT}: {exc}")
+        print(f"[ERROR] Zombie {zombie_ip} is unreachable on port {ZOMBIE_PORT}: {exc}")
 
 
 def main() -> int:
     zombies_file = find_zombies_file()
     if not zombies_file:
-        print(f"[ERRORE] zombies.txt non trovato. Percorsi provati: {', '.join(ZOMBIES_PATHS)}")
+        print(f"[ERROR] zombies.txt not found. Paths checked: {', '.join(ZOMBIES_PATHS)}")
         return 1
 
     zombies = read_zombies(zombies_file)
     if not zombies:
-        print(f"[ERRORE] {zombies_file} esiste ma non contiene IP zombie.")
+        print(f"[ERROR] {zombies_file} exists but contains no zombie IP addresses.")
         return 1
 
-    print(f"[INFO] Invio STOP agli zombie: {', '.join(zombies)}")
+    print(f"[INFO] Sending STOP to zombies: {', '.join(zombies)}")
 
     threads = []
     for zombie_ip in zombies:
@@ -66,7 +66,7 @@ def main() -> int:
     for thread in threads:
         thread.join()
 
-    print("[OK] Stop completato.")
+    print("[OK] Stop complete.")
     return 0
 
 

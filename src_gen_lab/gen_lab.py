@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generatore di laboratori Kathara a partire da configurazioni YAML."""
+"""Kathara lab generator driven by YAML configurations."""
 
 import argparse
 import ipaddress
@@ -18,7 +18,7 @@ FRR_IMAGE = "kathara/frr"
 
 
 # ---------------------------------------------------------------------------
-# Validazione e caricamento
+# Validation and loading
 # ---------------------------------------------------------------------------
 
 
@@ -28,15 +28,15 @@ def prepare_lab_directory(lab_dir: Path, clean: bool, force: bool) -> None:
 
     if lab_dir.exists() and not force and not clean:
         raise FileExistsError(
-            f"La cartella {lab_dir} esiste già. "
-            "Usa --force per sovrascrivere oppure --clean per eliminarla e rigenerarla."
+            f"Directory {lab_dir} already exists. "
+            "Use --force to overwrite it or --clean to remove and regenerate it."
         )
 
     lab_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Utility
+# Utilities
 # ---------------------------------------------------------------------------
 
 
@@ -79,14 +79,14 @@ def get_frr_section(node_data: dict[str, Any]) -> dict[str, Any]:
     if frr is None:
         return {}
     if not isinstance(frr, dict):
-        raise ValueError("La sezione frr deve essere un dizionario.")
+        raise ValueError("The frr section must be a dictionary.")
     return frr
 
 
 def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
-    """Restituisce i protocolli FRR richiesti dal nodo.
+    """Returns the FRR protocols requested by a node.
 
-    Retrocompatibilita':
+    Backward compatibility:
     - frr.protocol: ospf|rip|bgp
     - frr.protocols: [ospf, bgp] oppure {ospf: {...}, bgp: {...}}
     - frr.daemons: {ospfd: true, ripd: true, bgpd: true}
@@ -130,7 +130,7 @@ def get_frr_protocols(node_data: dict[str, Any]) -> list[str]:
 
 
 def get_protocol_section(frr: dict[str, Any], protocol: str) -> dict[str, Any]:
-    """Legge la configurazione specifica di protocollo, supportando piu' forme YAML."""
+    """Reads a protocol-specific configuration while supporting multiple YAML forms."""
     section: dict[str, Any] = {}
 
     raw_protocols = frr.get("protocols")
@@ -381,7 +381,7 @@ def generate_frr_conf(node_name: str, node_data: dict[str, Any]) -> str:
         bgp = get_protocol_section(frr, "bgp")
         asn = bgp.get("asn", frr.get("asn"))
         if asn is None:
-            raise ValueError(f"Il nodo {node_name} usa BGP ma manca frr.asn oppure frr.bgp.asn")
+            raise ValueError(f"Node {node_name} uses BGP but lacks frr.asn or frr.bgp.asn")
 
         router_id = bgp.get("router_id", common_router_id)
 
@@ -491,9 +491,9 @@ def validate_import_directories(config_path: Path, nodes: dict[str, Any], enable
     ]
     if invalid_dirs:
         raise ValueError(
-            "Cartelle da importare senza nodo corrispondente nel laboratorio: "
+            "Directories to import without a corresponding node in the lab: "
             + ", ".join(invalid_dirs)
-            + ". Rinomina/rimuovi la cartella oppure aggiungi un nodo con lo stesso nome nel YAML."
+            + ". Rename/remove the directory or add a node with the same name to the YAML file."
         )
 
 
@@ -505,10 +505,9 @@ def copy_node_directories(
 ) -> list[str]:
     """Copia nel lab le cartelle configs/<node_name>/ quando richiesto.
 
-    Esempio: se il file YAML e' configs/test.yml e viene passato
-    --import-node-dirs, la cartella configs/pc_a/ viene copiata in
-    labs/<lab_name>/pc_a/. In Kathara quei file risultano disponibili
-    nel container del nodo come /hostlab/<file>.
+    Example: if the YAML file is configs/test.yml and --import-node-dirs is
+    passed, configs/pc_a/ is copied to labs/<lab_name>/pc_a/. In Kathara these
+    files are available in the node container as /hostlab/<file>.
     """
     if not enabled:
         return []
@@ -555,7 +554,7 @@ WIRESHARK_IMAGE = "lscr.io/linuxserver/wireshark"
 
 
 def collision_domains(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Restituisce i collision domain presenti nel laboratorio."""
+    """Returns the collision domains defined in the lab."""
     domains: dict[str, dict[str, Any]] = {}
 
     for node_name, node_data in config["nodes"].items():
@@ -585,22 +584,22 @@ def format_domain_summary(domain: dict[str, Any]) -> str:
 
 
 def normalize_wireshark_networks(value: Any) -> list[str]:
-    """Normalizza reti/collision domain passati da YAML o CLI."""
+    """Normalizes networks/collision domains passed through YAML or the CLI."""
     if value is None:
         return []
     if isinstance(value, str):
         return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
-    raise ValueError("wireshark.networks deve essere una stringa o una lista.")
+    raise ValueError("wireshark.networks must be a string or a list.")
 
 
 def networks_attached_to_node(config: dict[str, Any], node_name: str) -> list[str]:
-    """Restituisce le reti/collision domain a cui e' collegato un nodo."""
+    """Returns the networks/collision domains connected to a node."""
     nodes = config["nodes"]
     if node_name not in nodes:
         raise ValueError(
-            f"Nodo '{node_name}' non trovato. Nodi disponibili: {', '.join(nodes.keys())}"
+            f"Node '{node_name}' not found. Available nodes: {', '.join(nodes.keys())}"
         )
     return unique_preserve_order(
         [str(interface["network"]) for interface in nodes[node_name].get("interfaces", [])]
@@ -608,20 +607,20 @@ def networks_attached_to_node(config: dict[str, Any], node_name: str) -> list[st
 
 
 def parse_network_selection(choice: str, domains: list[dict[str, Any]], config: dict[str, Any]) -> list[str] | None:
-    """Interpreta la scelta utente.
+    """Parses a user selection.
 
-    Formati supportati:
-    - 0 oppure invio: nessun Wireshark;
-    - all / tutte / *: tutte le reti;
-    - indici: 1 oppure 1,3,5;
-    - nomi rete: lan_a oppure lan_a,r1_r2;
-    - node:<nome>: tutte le reti collegate al nodo, es. node:r1.
+    Supported formats:
+    - 0 or ENTER: no Wireshark;
+    - all / *: all networks;
+    - indexes: 1 or 1,3,5;
+    - network names: lan_a or lan_a,r1_r2;
+    - node:<name>: all networks connected to a node, e.g. node:r1.
     """
     choice = choice.strip()
     if choice in {"", "0"}:
         return None
 
-    if choice.lower() in {"all", "tutte", "tutti", "*"}:
+    if choice.lower() in {"all", "*"}:
         return [domain["name"] for domain in domains]
 
     by_name = {domain["name"]: domain["name"] for domain in domains}
@@ -633,7 +632,7 @@ def parse_network_selection(choice: str, domains: list[dict[str, Any]], config: 
             continue
 
         lower_token = token.lower()
-        if lower_token.startswith("node:") or lower_token.startswith("nodo:"):
+        if lower_token.startswith("node:"):
             node_name = token.split(":", 1)[1].strip()
             selected.extend(networks_attached_to_node(config, node_name))
             continue
@@ -641,14 +640,14 @@ def parse_network_selection(choice: str, domains: list[dict[str, Any]], config: 
         if token.isdigit():
             index = int(token)
             if not (1 <= index <= len(domains)):
-                raise ValueError(f"Indice rete non valido: {token}")
+                raise ValueError(f"Invalid network index: {token}")
             selected.append(domains[index - 1]["name"])
             continue
 
         if token not in by_name:
             raise ValueError(
-                f"Collision domain '{token}' non trovato. "
-                f"Reti disponibili: {', '.join(by_name.keys())}"
+                f"Collision domain '{token}' not found. "
+                f"Available networks: {', '.join(by_name.keys())}"
             )
         selected.append(token)
 
@@ -656,20 +655,20 @@ def parse_network_selection(choice: str, domains: list[dict[str, Any]], config: 
 
 
 def ask_yes_no(question: str, default: bool = False) -> bool:
-    """Legge una risposta sì/no da terminale."""
-    default_label = "S/n" if default else "s/N"
+    """Reads a yes/no answer from the terminal."""
+    default_label = "Y/n" if default else "y/N"
     answer = input(f"{question} [{default_label}]: ").strip().lower()
 
     if not answer:
         return default
 
-    if answer in {"s", "si", "sì", "y", "yes"}:
+    if answer in {"y", "yes"}:
         return True
 
     if answer in {"n", "no"}:
         return False
 
-    print("Risposta non riconosciuta: considero 'no'.")
+    print("Unrecognized answer: assuming 'no'.")
     return False
 
 
@@ -678,11 +677,11 @@ def choose_wireshark_networks(
     requested_networks: str | None,
     wireshark_mode: str,
 ) -> list[str]:
-    """Determina dove collegare Wireshark.
+    """Determines where to attach Wireshark.
 
-    Nel modello Kathara ufficiale Wireshark non viene agganciato a un router,
-    ma viene collegato a uno o piu' collision domain del lab.conf. Per aiutare
-    l'utente, il menu mostra anche quali nodi/interfacce appartengono a ciascuna rete.
+    In the official Kathara model, Wireshark is not attached to a router. It is
+    connected to one or more collision domains from lab.conf. The menu also
+    shows which nodes/interfaces belong to each network.
     """
     domains = collision_domains(config)
     available = {domain["name"] for domain in domains}
@@ -692,8 +691,8 @@ def choose_wireshark_networks(
         invalid = [network for network in result if network not in available]
         if invalid:
             raise ValueError(
-                f"Collision domain Wireshark non presenti nel YAML: {', '.join(invalid)}. "
-                f"Disponibili: {', '.join(sorted(available))}"
+                f"Wireshark collision domains not present in the YAML: {', '.join(invalid)}. "
+                f"Available: {', '.join(sorted(available))}"
             )
         return result
 
@@ -711,7 +710,7 @@ def choose_wireshark_networks(
             wireshark.get("networks", wireshark.get("network"))
         )
         if yaml_networks:
-            # Supporta anche YAML: wireshark: { networks: "node:r1" }
+            # Also supports YAML: wireshark: { networks: "node:r1" }
             parsed = parse_network_selection(",".join(yaml_networks), domains, config)
             return validate_networks(parsed or [])
 
@@ -722,27 +721,27 @@ def choose_wireshark_networks(
         return []
 
     if wireshark_mode == "ask":
-        print("\nStrumentazione Wireshark real-time")
-        if not ask_yes_no("Vuoi implementare Wireshark real-time in questo laboratorio?", default=False):
+        print("\nReal-time Wireshark integration")
+        if not ask_yes_no("Enable real-time Wireshark integration for this lab?", default=False):
             return []
 
-    print("\nDove vuoi collegare Wireshark?")
-    print("Nel modello Kathara Wireshark si collega a una o piu' reti/collision domain.")
-    print("Scegli il punto del laboratorio da osservare.")
-    print("\nCollision domain disponibili:")
+    print("\nWhere should Wireshark be attached?")
+    print("In the Kathara model, Wireshark connects to one or more networks/collision domains.")
+    print("Select the observation point in the lab.")
+    print("\nAvailable collision domains:")
     for i, domain in enumerate(domains, start=1):
-        print(f"  {i}) {domain['name']}  | nodi: {format_domain_summary(domain)}")
-    print("  all) collegare Wireshark a tutte le reti")
-    print("  node:<nome>) collegare Wireshark a tutte le reti di un nodo, es. node:r1")
-    print("  0) non generare Wireshark")
+        print(f"  {i}) {domain['name']}  | nodes: {format_domain_summary(domain)}")
+    print("  all) attach Wireshark to every network")
+    print("  node:<name>) attach Wireshark to every network of a node, e.g. node:r1")
+    print("  0) do not generate Wireshark")
 
-    choice = input("Scelta (es. 1 oppure 1,3 oppure lan_a,r1_r2 oppure node:r1): ")
+    choice = input("Selection (e.g. 1, 1,3, lan_a,r1_r2, or node:r1): ")
     selected = parse_network_selection(choice, domains, config)
     return validate_networks(selected or [])
 
 
 def append_wireshark_to_lab_conf(lines: list[str], networks: list[str]) -> None:
-    """Aggiunge al lab.conf il nodo Wireshark come nel tutorial Kathara."""
+    """Adds the Wireshark node to lab.conf as described in the Kathara tutorial."""
     if not networks:
         return
 
@@ -758,11 +757,11 @@ def append_wireshark_to_lab_conf(lines: list[str], networks: list[str]) -> None:
 
 
 def remove_legacy_wireshark_scripts(lab_dir: Path) -> None:
-    """Rimuove eventuali script Wireshark legacy non più necessari.
+    """Removes obsolete Wireshark helper scripts.
 
-    Con l'integrazione real-time ufficiale, Wireshark è un nodo Kathara
-    definito direttamente in lab.conf. Non servono più start_wireshark.sh,
-    sniff.sh o stop_wireshark.sh.
+    With official real-time integration, Wireshark is a Kathara node defined
+    directly in lab.conf. start_wireshark.sh, sniff.sh, and stop_wireshark.sh
+    are no longer needed.
     """
     for script_name in ("start_wireshark.sh", "sniff.sh", "stop_wireshark.sh"):
         script_path = lab_dir / script_name
@@ -772,12 +771,12 @@ def remove_legacy_wireshark_scripts(lab_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# zombies.txt manuale per simulazioni DoS/C2
+# Manual zombies.txt generation for DoS/C2 simulations
 # ---------------------------------------------------------------------------
 
 
 def split_ip_tokens(value: str) -> list[str]:
-    """Divide IP separati da spazio, virgola, punto e virgola o newline."""
+    """Splits IP addresses separated by spaces, commas, semicolons, or newlines."""
     tokens: list[str] = []
     for chunk in value.replace(";", ",").replace("\n", ",").split(","):
         tokens.extend(part.strip() for part in chunk.split() if part.strip())
@@ -785,17 +784,17 @@ def split_ip_tokens(value: str) -> list[str]:
 
 
 def normalize_ip(value: str) -> str:
-    """Valida un IP inserito dall'utente e rimuove eventuale prefisso CIDR."""
+    """Validates a user-provided IP address and removes an optional CIDR prefix."""
     try:
         if "/" in value:
             return str(ipaddress.ip_interface(value).ip)
         return str(ipaddress.ip_address(value))
     except ValueError as exc:
-        raise ValueError(f"IP zombie non valido: {value}") from exc
+        raise ValueError(f"Invalid zombie IP address: {value}") from exc
 
 
 def parse_zombie_ips(value: str) -> list[str]:
-    """Restituisce IP validi, senza duplicati, mantenendo l'ordine di inserimento."""
+    """Returns valid, unique IP addresses while preserving input order."""
     ips: list[str] = []
     for token in split_ip_tokens(value):
         ip = normalize_ip(token)
@@ -805,7 +804,7 @@ def parse_zombie_ips(value: str) -> list[str]:
 
 
 def default_c2_node(nodes: dict[str, Any]) -> str | None:
-    """Propone il nodo C2/attacker su cui montare zombies.txt."""
+    """Suggests the C2/attacker node on which to mount zombies.txt."""
     for node_name in nodes:
         if "attacker" in node_name.lower():
             return node_name
@@ -816,32 +815,32 @@ def default_c2_node(nodes: dict[str, Any]) -> str | None:
 
 
 def choose_c2_node(nodes: dict[str, Any], requested: str | None, interactive: bool) -> str:
-    """Sceglie il nodo in cui scrivere zombies.txt."""
+    """Selects the node where zombies.txt is written."""
     if requested:
         if requested not in nodes:
             raise ValueError(
-                f"Nodo C2/attacker '{requested}' non trovato. "
-                f"Nodi disponibili: {', '.join(nodes.keys())}"
+                f"C2/attacker node '{requested}' not found. "
+                f"Available nodes: {', '.join(nodes.keys())}"
             )
         return requested
 
     proposed = default_c2_node(nodes)
     if interactive:
         if proposed:
-            answer = input(f"Nodo C2/attacker per zombies.txt [{proposed}]: ").strip()
+            answer = input(f"C2/attacker node for zombies.txt [{proposed}]: ").strip()
             node_name = answer or proposed
         else:
-            print("Nodi disponibili:")
+            print("Available nodes:")
             for node_name in nodes:
                 print(f"  - {node_name}")
-            node_name = input("Nodo C2/attacker per zombies.txt: ").strip()
+            node_name = input("C2/attacker node for zombies.txt: ").strip()
 
         if not node_name:
-            raise ValueError("Nodo C2/attacker non indicato.")
+            raise ValueError("No C2/attacker node was specified.")
         if node_name not in nodes:
             raise ValueError(
-                f"Nodo C2/attacker '{node_name}' non trovato. "
-                f"Nodi disponibili: {', '.join(nodes.keys())}"
+                f"C2/attacker node '{node_name}' not found. "
+                f"Available nodes: {', '.join(nodes.keys())}"
             )
         return node_name
 
@@ -849,25 +848,25 @@ def choose_c2_node(nodes: dict[str, Any], requested: str | None, interactive: bo
         return proposed
 
     raise ValueError(
-        "Impossibile scegliere automaticamente il nodo C2/attacker. "
-        "Usa --zombies-node <nome_nodo>."
+        "Unable to select the C2/attacker node automatically. "
+        "Use --zombies-node <node_name>."
     )
 
 
 def ask_zombie_ips() -> list[str]:
-    """Chiede manualmente gli IP zombie all'utente."""
-    print("\nGenerazione manuale zombies.txt")
-    print("Inserisci gli IP degli zombie separati da spazio, virgola o punto e virgola.")
-    print("Puoi anche inserire un IP per riga; lascia una riga vuota per terminare.")
+    """Prompts the user for zombie IP addresses."""
+    print("\nManual zombies.txt generation")
+    print("Enter zombie IP addresses separated by spaces, commas, or semicolons.")
+    print("You can also enter one IP per line; submit an empty line to finish.")
 
     lines: list[str] = []
-    first = input("IP zombie: ").strip()
+    first = input("Zombie IP: ").strip()
     if not first:
         return []
     lines.append(first)
 
     while True:
-        line = input("IP zombie aggiuntivo [INVIO per finire]: ").strip()
+        line = input("Additional zombie IP [ENTER to finish]: ").strip()
         if not line:
             break
         lines.append(line)
@@ -882,9 +881,9 @@ def write_manual_zombies_file(
     zombies_node: str | None,
     zombies_ips_arg: str | None,
 ) -> Path | None:
-    """Crea zombies.txt solo con IP inseriti manualmente dall'utente o da CLI.
+    """Creates zombies.txt only from IPs supplied manually or through the CLI.
 
-    Non estrae piu' automaticamente gli IP dai nodi del YAML.
+    It does not extract IP addresses automatically from YAML nodes.
     """
     if mode == "disabled":
         return None
@@ -897,14 +896,14 @@ def write_manual_zombies_file(
     elif mode == "manual":
         if not interactive:
             raise ValueError(
-                "--zombies manual richiede un terminale interattivo oppure --zombies-ips."
+                "--zombies manual requires an interactive terminal or --zombies-ips."
             )
         zombie_ips = ask_zombie_ips()
     else:
-        raise ValueError(f"Modalita' zombies non valida: {mode}")
+        raise ValueError(f"Invalid zombies mode: {mode}")
 
     if not zombie_ips:
-        print("[Framework] zombies.txt non generato: nessun IP zombie inserito.")
+        print("[Framework] zombies.txt was not generated: no zombie IP addresses were provided.")
         return None
 
     c2_node = choose_c2_node(nodes, zombies_node, interactive=interactive)
@@ -915,8 +914,8 @@ def write_manual_zombies_file(
     zombies_file_path.write_text("\n".join(zombie_ips) + "\n", encoding="utf-8")
 
     print(
-        f"[Framework] Generato manualmente zombies.txt con {len(zombie_ips)} IP "
-        f"per il nodo {c2_node}: {zombies_file_path}"
+        f"[Framework] Manually generated zombies.txt with {len(zombie_ips)} IP addresses "
+        f"for node {c2_node}: {zombies_file_path}"
     )
     return zombies_file_path
 
@@ -942,9 +941,9 @@ def generate_lab(
 
     if selected_wireshark_networks and WIRESHARK_NODE_NAME in nodes:
         raise ValueError(
-            f"Il YAML contiene già un nodo chiamato '{WIRESHARK_NODE_NAME}'. "
-            "Rinomina quel nodo oppure cambia WIRESHARK_NODE_NAME nel generatore, "
-            "altrimenti il lab.conf avrebbe definizioni duplicate."
+            f"The YAML already contains a node named '{WIRESHARK_NODE_NAME}'. "
+            "Rename that node or change WIRESHARK_NODE_NAME in the generator; "
+            "otherwise lab.conf would contain duplicate definitions."
         )
 
     lab_dir = output_dir / lab_name
@@ -959,9 +958,9 @@ def generate_lab(
         enabled=import_dirs,
     )
 
-    # Generazione opzionale e manuale di zombies.txt.
-    # Default: disattivata, senza domande a terminale.
-    # Gli IP non vengono piu' estratti automaticamente dal YAML: li decide l'utente.
+    # Optional, manual zombies.txt generation.
+    # Default: disabled, with no terminal prompts.
+    # IP addresses are not extracted automatically from YAML; the user supplies them.
     write_manual_zombies_file(
         lab_dir=lab_dir,
         nodes=nodes,
@@ -978,7 +977,7 @@ def generate_lab(
         if is_frr_device(node_data):
             write_frr_files(lab_dir, node_name, node_data)
 
-    # Gli script legacy non sono più necessari: Wireshark è già nel lab.conf.
+    # Legacy scripts are unnecessary because Wireshark is already in lab.conf.
     remove_legacy_wireshark_scripts(lab_dir)
     wireshark_integrated = bool(selected_wireshark_networks)
 
@@ -987,19 +986,19 @@ def generate_lab(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Genera lab.conf, file .startup e configurazioni FRR per Kathara."
+        description="Generate lab.conf, .startup files, and FRR configurations for Kathara."
     )
 
     parser.add_argument(
         "lab",
-        help="File YAML da leggere oppure nome del laboratorio.",
+        help="YAML file to read or lab name.",
     )
 
     parser.add_argument(
         "--config-dir",
         default="configs",
         type=Path,
-        help="Cartella dove cercare i file YAML se viene passato solo il nome del lab. Default: configs",
+        help="Directory used to search for YAML files when only a lab name is supplied. Default: configs",
     )
 
     parser.add_argument(
@@ -1007,27 +1006,27 @@ def parse_args() -> argparse.Namespace:
         "-o",
         default="labs",
         type=Path,
-        help="Cartella di output dei laboratori generati. Default: labs",
+        help="Output directory for generated labs. Default: labs",
     )
 
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="Elimina e ricrea la cartella del laboratorio se esiste già.",
+        help="Remove and recreate the lab directory if it already exists.",
     )
 
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Sovrascrive i file se la cartella del laboratorio esiste già.",
+        help="Overwrite files if the lab directory already exists.",
     )
 
     parser.add_argument(
         "--wireshark-networks",
         default=None,
         help=(
-            "Collision domain da collegare a Wireshark, separati da virgola. "
-            "Esempio: lan_a,r1_r2. Se omesso, con --wireshark enabled/ask viene chiesto a terminale."
+            "Comma-separated collision domains to attach to Wireshark. "
+            "Example: lan_a,r1_r2. If omitted, --wireshark enabled/ask prompts on the terminal."
         ),
     )
 
@@ -1036,9 +1035,9 @@ def parse_args() -> argparse.Namespace:
         choices=["ask", "enabled", "disabled"],
         default="ask",
         help=(
-            "Modalità Wireshark real-time: "
-            "ask chiede a terminale, enabled salta la prima domanda e chiede solo le reti, "
-            "disabled non aggiunge Wireshark al lab.conf. Default: ask."
+            "Real-time Wireshark mode: "
+            "ask prompts on the terminal, enabled skips the first question and asks only for networks, "
+            "disabled does not add Wireshark to lab.conf. Default: ask."
         ),
     )
 
@@ -1046,8 +1045,8 @@ def parse_args() -> argparse.Namespace:
         "--import-dirs",
         action="store_true",
         help=(
-            "Importa nel laboratorio generato le cartelle dei nodi presenti accanto al file YAML. "
-            "Esempio: configs/pc_a/ viene copiata in labs/<lab_name>/pc_a/."
+            "Import node directories next to the YAML file into the generated lab. "
+            "Example: configs/pc_a/ is copied to labs/<lab_name>/pc_a/."
         ),
     )
 
@@ -1057,9 +1056,9 @@ def parse_args() -> argparse.Namespace:
         choices=["manual", "disabled"],
         default="disabled",
         help=(
-            "Gestione del file zombies.txt: "
-            "disabled non lo genera e non fa domande; "
-            "manual forza l'inserimento manuale oppure usa --zombies-ips. "
+            "zombies.txt handling: "
+            "disabled does not generate it or prompt; "
+            "manual forces manual input or uses --zombies-ips. "
             "Default: disabled."
         ),
     )
@@ -1068,8 +1067,8 @@ def parse_args() -> argparse.Namespace:
         "--zombies-node",
         default=None,
         help=(
-            "Nodo C2/attacker in cui scrivere zombies.txt. "
-            "Se omesso, viene proposto il primo nodo con 'attacker' nel nome."
+            "C2/attacker node where zombies.txt is written. "
+            "If omitted, the first node containing 'attacker' in its name is proposed."
         ),
     )
 
@@ -1077,8 +1076,8 @@ def parse_args() -> argparse.Namespace:
         "--zombies-ips",
         default=None,
         help=(
-            "IP zombie da scrivere in zombies.txt, separati da virgola, spazio o punto e virgola. "
-            "Esempio: --zombies-ips '10.0.1.10,10.0.1.11'."
+            "Zombie IP addresses written to zombies.txt, separated by commas, spaces, or semicolons. "
+            "Example: --zombies-ips '10.0.1.10,10.0.1.11'."
         ),
     )
 
@@ -1103,42 +1102,42 @@ def main() -> int:
             zombies_ips=args.zombies_ips,
         )
 
-        print(f"[OK] Configurazione letta: {config_path}")
-        print(f"[OK] Laboratorio generato: {lab_dir}")
+        print(f"[OK] Configuration read: {config_path}")
+        print(f"[OK] Lab generated: {lab_dir}")
         print("")
-        print("Per avviare:")
+        print("To start:")
         print(f"  ./start.sh {lab_dir}")
-        print("Oppure:")
+        print("Or:")
         print(f"  cd {lab_dir}")
         print("  kathara lstart")
         print("")
-        print("Per fermare:")
+        print("To stop:")
         print(f"  ./stop.sh {lab_dir}")
-        print("Oppure:")
+        print("Or:")
         print(f"  cd {lab_dir}")
         print("  kathara lclean")
         print("")
 
         if wireshark_generated:
-            print("Wireshark real-time integrato nel lab.conf.")
-            print(f"Collision domain osservati: {', '.join(selected_wireshark_networks)}")
-            print("Per avviare Wireshark basta avviare il laboratorio:")
+            print("Real-time Wireshark is integrated in lab.conf.")
+            print(f"Observed collision domains: {', '.join(selected_wireshark_networks)}")
+            print("Start the lab to start Wireshark:")
             print("  kathara lstart")
             print("GUI: http://localhost:3000")
-            print("Credenziali standard LinuxServer Wireshark: abc / abc")
+            print("Default LinuxServer Wireshark credentials: abc / abc")
         else:
-            print("Wireshark non integrato nel laboratorio.")
+            print("Wireshark is not integrated in the lab.")
 
         if imported_node_dirs:
             print("")
-            print("Cartelle nodo importate:")
+            print("Imported node directories:")
             for node_name in imported_node_dirs:
                 print(f"  - {node_name}")
 
         return 0
 
     except Exception as exc:
-        print(f"[ERRORE] {exc}", file=sys.stderr)
+        print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
 
 

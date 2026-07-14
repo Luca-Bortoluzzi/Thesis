@@ -1,6 +1,6 @@
 lab_name: multi-AS
 
-description: Topologia multi-AS con più LAN collegate tramite router in maglia estesa con eBGP.
+description: Multi-AS topology with multiple LANs connected through an extended eBGP router mesh.
 
 metadata:
   description: "Multi-AS BGP topology"

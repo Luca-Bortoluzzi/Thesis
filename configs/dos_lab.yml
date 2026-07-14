@@ -1,11 +1,11 @@
-lab_name: dos_enterprise_lab
+lab_name: dos_lab
 
 description: >
-  Laboratorio Kathara esteso per simulazione controllata di attacco DoS.
-  La topologia rappresenta una rete aziendale multi-LAN con più host
-  legittimi, una rete attacker separata e una DMZ contenente il server
-  vittima. Il laboratorio è pensato per testare disponibilità, RTT,
-  perdita pacchetti e degradazione del servizio sotto traffico anomalo.
+  Extended Kathara lab for controlled DoS simulation. The topology represents a
+  multi-LAN enterprise network with several legitimate hosts, a separate
+  attacker network, and a DMZ containing the target server. The lab is designed
+  to test availability, ICMP RTT, TCP timing, and application degradation under
+  anomalous traffic.
 
 metadata:
   description: "Enterprise DoS simulation topology with multiple legitimate hosts"
@@ -17,7 +17,7 @@ metadata:
 nodes:
 
   # =========================
-  # LAN A - utenti legittimi
+  # LAN A - legitimate users
   # =========================
 
   pc_a1:
@@ -49,7 +49,7 @@ nodes:
     default_gateway: 10.10.1.1
 
   # =========================
-  # LAN B - utenti legittimi
+  # LAN B - legitimate users
   # =========================
 
   pc_b1:
@@ -81,7 +81,7 @@ nodes:
     default_gateway: 10.10.2.1
 
   # =========================
-  # Rete attacker
+  # Attacker network
   # =========================
 
   attacker:
@@ -119,7 +119,7 @@ nodes:
       - python3 /hostlab/zombie.py > /tmp/zombie.log 2>&1 &
 
   # =========================
-  # DMZ - server vittima
+  # DMZ - target server
   # =========================
 
   server:
@@ -132,7 +132,7 @@ nodes:
       - SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 python3 /hostlab/service.py > /tmp/service.log 2>&1 &
 
   # =========================
-  # Router aziendali
+  # Enterprise routers
   # =========================
 
   r1:

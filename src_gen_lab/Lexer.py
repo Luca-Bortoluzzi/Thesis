@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lexer YAML per la generazione di laboratori Kathara."""
+"""YAML loader utilities for Kathara lab generation."""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ from typing import Any
 try:
     import yaml
 except ImportError:
-    print("Errore: PyYAML non installato. Esegui: pip install pyyaml", file=sys.stderr)
+    print("Error: PyYAML is not installed. Run: pip install pyyaml", file=sys.stderr)
     raise
 
 YAML_EXTENSIONS = (".yml", ".yaml")
@@ -25,19 +25,19 @@ def resolve_config_path(argument: str, config_dir: Path) -> Path:
             return possible
 
     raise FileNotFoundError(
-        f"Configurazione non trovata per '{argument}'. "
-        f"Passa un file YAML valido oppure metti {argument}.yml in {config_dir}"
+        f"Configuration not found for '{argument}'. "
+        f"Pass a valid YAML file or place {argument}.yml in {config_dir}"
     )
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
-        raise FileNotFoundError(f"File YAML non trovato: {path}")
+        raise FileNotFoundError(f"YAML file not found: {path}")
 
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        raise ValueError(f"Il file {path} non contiene una configurazione YAML valida.")
+        raise ValueError(f"File {path} does not contain a valid YAML configuration.")
 
     return data

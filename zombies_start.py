@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_LAB = "dos_enterprise_lab"
+DEFAULT_LAB = "dos_lab"
 DEFAULT_SOURCE = Path("attacks/zombie/zombie.py")
 DEFAULT_SHARED_SCRIPT = "zombie.py"
 TIMEOUT = 12
@@ -20,7 +20,7 @@ MARKER = "__ZOMBIES_START_RC__:"
 
 
 def die(message):
-    print(f"[ERRORE] {message}", file=sys.stderr)
+    print(f"[ERROR] {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -123,12 +123,12 @@ def project_root():
         if (path / "labs").is_dir():
             return path
 
-    die("Cartella labs/ non trovata. Esegui lo script dalla root del progetto.")
+    die("labs/ directory not found. Run the script from the project root.")
 
 
 def zombie_nodes(lab_conf):
     if not lab_conf.exists():
-        die(f"File lab.conf non trovato: {lab_conf}")
+        die(f"lab.conf file not found: {lab_conf}")
 
     nodes = set()
 
@@ -144,11 +144,11 @@ def zombie_nodes(lab_conf):
 
 def copy_script(root, lab_dir, source, name):
     if Path(name).name != name or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-        die("--shared-script deve essere solo un nome file semplice, ad esempio zombie.py")
+        die("--shared-script must be a simple file name, for example zombie.py")
 
     source_path = root / source
     if not source_path.exists():
-        die(f"Script zombie sorgente non trovato: {source_path}")
+        die(f"Source zombie script not found: {source_path}")
 
     shared_dir = lab_dir / "shared"
     shared_dir.mkdir(parents=True, exist_ok=True)
@@ -196,7 +196,7 @@ for base in /shared /hostlab/shared /hostlab; do
 done
 
 if [ -z "${{SCRIPT:-}}" ]; then
-    echo "FAILED|Script non trovato: $SCRIPT_NAME"
+    echo "FAILED|Script not found: $SCRIPT_NAME"
     exit 1
 fi
 
@@ -215,26 +215,26 @@ fi
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Avvia zombie.py nei nodi zombie Kathara.")
+    parser = argparse.ArgumentParser(description="Start zombie.py on Kathara zombie nodes.")
     parser.add_argument("--lab", default=DEFAULT_LAB)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE))
     parser.add_argument("--shared-script", default=DEFAULT_SHARED_SCRIPT)
-    parser.add_argument("--nodes", help="Lista nodi separati da virgola, es. zombie_1,zombie_2")
+    parser.add_argument("--nodes", help="Comma-separated node list, e.g. zombie_1,zombie_2")
     parser.add_argument("--restart", action="store_true")
     args = parser.parse_args()
 
     root = project_root()
     lab_dir = root / "labs" / args.lab
     if not lab_dir.exists():
-        die(f"Laboratorio non trovato: {lab_dir}")
+        die(f"Lab not found: {lab_dir}")
 
     nodes = [n.strip() for n in args.nodes.split(",") if n.strip()] if args.nodes else zombie_nodes(lab_dir / "lab.conf")
     if not nodes:
-        die("Nessun nodo zombie trovato. Verifica lab.conf oppure usa --nodes.")
+        die("No zombie nodes found. Check lab.conf or use --nodes.")
 
     copied = copy_script(root, lab_dir, Path(args.source), args.shared_script)
     print(f"[OK] Script copiato in: {copied}")
-    print(f"[INFO] Nodi zombie rilevati: {', '.join(nodes)}")
+    print(f"[INFO] Detected zombie nodes: {', '.join(nodes)}")
     print("\n=== RISULTATO ===")
 
     failed = False
@@ -257,7 +257,7 @@ def main():
             print(f"[GIÀ ATTIVO] {node} | PID: {detail}")
         else:
             failed = True
-            print(f"[FALLITO] {node} -> {detail or output or 'errore sconosciuto'}")
+            print(f"[FAILED] {node} -> {detail or output or 'unknown error'}")
 
     if failed:
         sys.exit(1)

@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# Controlla se è stato passato almeno un parametro
+# Check whether at least one parameter was provided.
 if [ -z "$1" ]; then
-    echo "Error: Devi specificare il nome dell'environment."
-    echo "Uso: $0 <nome-environment> o all"
+    echo "Error: you must specify an environment name."
+    echo "Usage: $0 <environment-name> or all"
     exit 1
 fi
 
-# Path della directory del laboratorio
+# Lab directory path.
 LAB_NAME=$1
 
 if [ "$LAB_NAME" = "all" ]; then
     echo "Remove all the labs..."
-    # Rimuove tutto il contenuto dentro labs, ma mantiene la cartella 'labs' stessa
+    # Remove the contents of labs while preserving the labs directory itself.
     sudo rm -rf ./labs/*
 elif [ -d "$LAB_NAME" ]; then
     echo "Remove lab: $LAB_NAME..."

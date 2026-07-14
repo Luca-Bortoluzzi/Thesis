@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrapper per il generatore dei laboratori Kathara."""
+"""Command-line wrapper for the Kathara lab generator."""
 
 import sys
 

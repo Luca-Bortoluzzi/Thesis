@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Servizio TCP didattico per test di disponibilità.
-Versione modificata per rendere misurabile l'effetto della saturazione:
-- numero massimo di handler applicativi contemporanei;
-- risposta 'pong' verificabile dal tester;
-- log degli overload.
+Educational TCP service for availability testing.
+It exposes measurable saturation effects through:
+- a maximum number of concurrent application handlers;
+- a testable 'pong' response;
+- overload logging.
 """
 import os
 import socket
@@ -34,7 +34,7 @@ def handle_client(conn, addr):
     global active_clients
     acquired = slots.acquire(blocking=False)
     if not acquired:
-        print(f"[OVERLOAD] Connessione rifiutata da {addr}: limite applicativo raggiunto", flush=True)
+        print(f"[OVERLOAD] Connection rejected from {addr}: application limit reached", flush=True)
         safe_send(conn, b"BUSY\n")
         conn.close()
         return
@@ -42,18 +42,18 @@ def handle_client(conn, addr):
     with active_lock:
         active_clients += 1
         current = active_clients
-    print(f"[CONN] {addr} attiva. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
+    print(f"[CONN] {addr} active. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
 
     try:
         conn.settimeout(CLIENT_TIMEOUT)
         menu = (
             b"=================================\n"
-            b" Servizio TCP laboratorio DoS\n"
+            b" DoS Lab TCP Service\n"
             b"=================================\n\n"
             b"1) Ping\n"
-            b"2) Info server\n"
-            b"3) Esci\n\n"
-            b"Scelta: "
+            b"2) Server information\n"
+            b"3) Exit\n\n"
+            b"Selection: "
         )
         if not safe_send(conn, menu):
             return
@@ -61,7 +61,7 @@ def handle_client(conn, addr):
         try:
             raw = conn.recv(1024)
         except socket.timeout:
-            safe_send(conn, b"\nTimeout: nessuna scelta ricevuta\n")
+            safe_send(conn, b"\nTimeout: no selection received\n")
             return
         except (ConnectionResetError, ConnectionAbortedError):
             return
@@ -73,14 +73,14 @@ def handle_client(conn, addr):
         if data == "1":
             safe_send(conn, b"\npong\n")
         elif data == "2":
-            safe_send(conn, b"\nServer DMZ - servizio TCP attivo\n")
+            safe_send(conn, b"\nDMZ server - TCP service active\n")
         elif data == "3":
-            safe_send(conn, b"\nChiusura connessione\n")
+            safe_send(conn, b"\nClosing connection\n")
         else:
-            safe_send(conn, b"\nScelta non valida\n")
+            safe_send(conn, b"\nInvalid selection\n")
 
     except Exception:
-        print(f"[ERRORE] Errore imprevisto con client {addr}", flush=True)
+        print(f"[ERROR] Unexpected error with client {addr}", flush=True)
         traceback.print_exc()
     finally:
         try:
@@ -91,7 +91,7 @@ def handle_client(conn, addr):
             active_clients -= 1
             current = active_clients
         slots.release()
-        print(f"[DISC] {addr} chiusa. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
+        print(f"[DISC] {addr} closed. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
 
 
 def main():
@@ -101,16 +101,16 @@ def main():
                 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 server.bind((HOST, PORT))
                 server.listen(BACKLOG)
-                print(f"[OK] Servizio TCP attivo su {HOST}:{PORT}; backlog={BACKLOG}; max_active={MAX_ACTIVE_CLIENTS}", flush=True)
+                print(f"[OK] TCP service active on {HOST}:{PORT}; backlog={BACKLOG}; max_active={MAX_ACTIVE_CLIENTS}", flush=True)
                 while True:
                     try:
                         conn, addr = server.accept()
                     except OSError as exc:
-                        print(f"[ERRORE] accept(): {exc}", flush=True)
+                        print(f"[ERROR] accept(): {exc}", flush=True)
                         continue
                     threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
         except OSError as exc:
-            print(f"[ERRORE] socket server: {exc}; riavvio", flush=True)
+            print(f"[ERROR] server socket: {exc}; restarting", flush=True)
 
 
 if __name__ == "__main__":

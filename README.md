@@ -1,183 +1,367 @@
-# Technical Report – Kathara Network Lab Generator
+# Kathara Network Lab Generator and DoS Measurement Framework
 
-## 1. Project Overview
+This project generates Kathara network laboratories from YAML topology files and
+provides a controlled, repeatable workflow for measuring service availability
+under normal traffic and bounded denial-of-service (DoS) load.
 
-This project provides a Python-based framework for automatically generating Kathara network laboratories from YAML configuration files.
+It is intended for educational, experimental, and thesis work in isolated
+environments. The included DoS tooling must only be used inside laboratories
+that you own or are explicitly authorized to operate.
 
-The main goal is to describe a network topology in a structured and readable format, then automatically generate a complete Kathara lab containing:
+## Capabilities
 
-- `lab.conf`;
-- startup files for each device;
-- FRRouting configuration files;
-- optional Wireshark integration;
-- optional file import into hosts;
-- connection testing tools;
-- controlled DoS simulation support.
+- Generate Kathara labs from YAML topology descriptions.
+- Create host, router, switch, and firewall startup configuration.
+- Generate FRRouting configuration for OSPF, RIP, and BGP.
+- Import per-node files into generated labs.
+- Optionally attach Wireshark using Kathara real-time integration.
+- Measure ICMP RTT, TCP connection time, application response time, and request
+  completion time from inside client containers.
+- Run baseline and controlled DoS scenarios with concurrent legitimate clients.
+- Produce CSV data, textual reports, and metric plots.
 
-The project is designed for educational, experimental, and validation purposes. It allows repeatable testing of different network topologies without manually writing all Kathara configuration files.
+## Repository layout
 
-The general project structure is:
-
-```text
-Thesis/
-├── configs/                       # YAML topology files and optional host files
-├── src_gen_lab/                   # Core generator modules
-│   ├── Lexer.py
-│   ├── Parser.py
-│   └── gen_lab.py
-├── generate_lab.py                # Main lab generation wrapper
-├── start.sh                       # Lab startup script
-├── stop.sh                        # Lab shutdown script
-├── del_lab.sh                     # Generated lab removal script
-├── run_connection_tests.py        # TCP connection test script
-├── show_connection_results.py     # Result analysis and RTT plot script
-├── attacks/                       # Controlled DoS-related scripts
-├── labs/                          # Generated Kathara labs
-├── logs/                          # Test logs
-└── results/                       # CSV results and generated plots
-```
+    Thesis/
+    ├── configs/                    YAML topologies and files imported into nodes
+    │   ├── dos_lab.yml             Controlled DoS topology
+    │   ├── mitigation.yml          Reverse-proxy mitigation topology
+    │   ├── server/service.py       Measured TCP service
+    │   ├── server/reverse_proxy.py Rate-limiting TCP reverse proxy
+    │   ├── backend_server/         Private application service for mitigation
+    │   ├── attacker/               C2 controller and related assets
+    │   └── zombie_*/               Zombie agents
+    ├── src_gen_lab/                YAML parser and Kathara lab generator
+    ├── labs/                       Generated labs
+    ├── attacks/                    Standalone controlled-attack utilities
+    ├── run_connection_tests.py     Client-side metric collector
+    ├── show_connection_results.py  CSV report and plotting tool
+    ├── simulate.sh                 End-to-end baseline/attack workflow
+    ├── zombies_start.py            Starts zombie agents in an existing lab
+    ├── zombies_stop.py             Stops compatible zombie agents
+    ├── results/                    CSV results and plots
+    └── logs/                       Per-run and per-client logs
 
 ## Requirements
 
-- Python 3.10+ (or compatible)
-- PyYAML (`pip install pyyaml`)
-- Kathara installed and configured
-- Docker available for Wireshark and lab containers
+- Python 3.10 or newer.
+- PyYAML.
+- matplotlib for plot generation.
+- Bash, timeout, and standard Unix utilities.
+- Docker.
+- Kathara, configured for the current user.
+- python3 and ping in the Kathara client image used for measurements.
 
-## Main usage
+Install Python dependencies:
 
-Generate a lab by passing the YAML file or the lab name located in `configs/`:
+    python3 -m pip install pyyaml matplotlib
 
-```bash
-./generate_lab.sh configs/client-router-server.yml
-```
+## Generate a lab
 
-Or:
+Generate from a YAML path:
 
-```bash
-./generate_lab.sh client-router-server --clean
-```
+    ./generate_lab.py configs/client-router-server.yml
 
-Supported options:
+Generate by the configuration name in configs:
 
-- `--config-dir DIR`: YAML search directory (default `configs`)
-- `--output-dir DIR`: output directory for generated labs (default `labs`)
-- `--clean`: delete and recreate the lab directory
-- `--force`: overwrite existing files
-- `--sniff-node NODE`: generate Wireshark scripts for a specific node
-- `--wireshark {ask,enabled,disabled}`: Wireshark generation mode
+    ./generate_lab.py client-router-server --clean
 
-## Generator architecture details
+Generate the DoS lab and import the server, attacker, and zombie directories:
 
-### YAML Topology Description
+    ./generate_lab.py dos_lab --force --import-dirs --zombies manual \
+      --zombies-node attacker \
+      --zombies-ips "10.20.1.11,10.20.1.12,10.20.1.13"
 
-Each lab is defined through a YAML file stored inside the configs/ directory.
+Important generator options:
 
-A basic YAML topology contains:
+- --config-dir DIR: directory containing topology YAML files; default configs.
+- --output-dir DIR: destination directory; default labs.
+- --clean: remove and recreate the selected lab directory.
+- --force: overwrite generated files.
+- --import-dirs: import directories matching node names next to the YAML file.
+- --wireshark ask|enabled|disabled: configure real-time Wireshark integration.
+- --sniff-node NODE: attach Wireshark to the networks of a node.
+- --zombies manual|auto|disabled: manage zombies.txt generation.
+- --zombies-node NODE: node that receives zombies.txt.
+- --zombies-ips LIST: comma-separated zombie IP addresses.
 
-```yaml
-lab_name: lab_name
-nodes: # defines the list of nodes in the simulation
-  node1:  # name of the node
-    type: host  # type of the devise, it can be "host" or "router"
-    interfaces:
-      - network: lan_a # name of the network
-        ip: 10.10.1.10/24 # ipv4 address
-    default_gateway: 10.10.1.1 # default gateway's IPv4 
-```
+## YAML topology format
 
-This generates a Kathara .startup file equal to:
-```
-ip address add 10.10.1.10/24 dev eth0
-ip route add default via 10.10.1.1
-```
+Every configuration contains a lab_name and a nodes mapping. Each node must
+define at least one interface with a network.
 
-Example of a router:
-```yaml
-r1: # router's name
-  type: router # define the node as a router
-  interfaces: # configure interfaces
-    - network: lan_a # name of the first network
-      ip: 10.10.1.1/24 # ip addr of the network interface (this will be the eth0)
-    - network: r1_r2 # name of the second network
-      ip: 10.0.12.1/30 # ip addr of the network interface (this will be the eth1)
-  frr: # configuration of frr 
-    enabled: true # implement the zebra's daemon
-    protocol: ospf # define wich daemon put on (can be multiples daemons --> es. protocol: [ospf, bgp])
-    router_id: 1.1.1.1 # configure the daemon 
-    area: 0
-```
+    lab_name: example_lab
+    description: Example routed network
+    nodes:
+      client:
+        type: host
+        interfaces:
+          - network: lan
+            ip: 10.0.1.10/24
+        default_gateway: 10.0.1.1
+
+      router:
+        type: router
+        interfaces:
+          - network: lan
+            ip: 10.0.1.1/24
+          - network: transit
+            ip: 10.0.12.1/30
+        frr:
+          enabled: true
+          protocol: ospf
+          router_id: 1.1.1.1
+          area: 0
+
+Supported node properties:
+
+- type: host, router, switch, or firewall.
+- image: optional Docker image override.
+- interfaces: list of network interfaces with network and optional ip.
+- default_gateway: default IPv4 gateway.
+- routes: static routes.
+- commands: commands written to the startup file.
+- frr: routing configuration for FRR-capable nodes.
+
+Supported FRR protocol forms:
+
+- frr.protocol: a single protocol such as ospf, rip, or bgp.
+- frr.protocols: a list or mapping of protocol definitions.
+- frr.daemons: direct daemon enablement.
+
+The generator writes lab.conf, node startup files, and FRR files where needed.
+
+## Reverse-proxy mitigation lab
+
+The mitigation topology is directly comparable with dos_lab: it uses the same
+eight legitimate clients, three zombies, attacker network, routers, and OSPF
+links. The public service address belongs to a reverse proxy instead of the
+application server.
+
+    clients / zombies -> server 10.30.1.10:9000 -> backend_server 10.30.2.10:9000
+
+The public server node runs the reverse proxy and has two interfaces. Its public interface is advertised through the
+enterprise routing domain, while the backend interface belongs to a private
+network that is not connected to or advertised by the routing core. Therefore,
+the zombies cannot bypass the proxy and connect directly to the server.
+
+The proxy allows at most two simultaneous connections from one source IP. The
+three zombies can consequently occupy no more than six backend handlers in
+total, leaving capacity for legitimate hosts. Excess connections receive
+RATE_LIMITED and are closed before a backend connection is opened.
+
+Generate the laboratory:
+
+    ./generate_lab.py mitigation --force --import-dirs --wireshark disabled
+
+Run baseline and protected-attack measurements:
+
+    ./simulate.sh mitigation full --plot
+
+The same command is available through Make:
+
+    make mitigation
+
+For a lab named mitigation, the measurement and attack target remains server.
+simulate.sh automatically uses backend_server only for starting and checking
+the private application service. An explicit --server option overrides this
+selection. Results retain the standard baseline and dos scenario names.
+
+Reverse-proxy environment variables:
+
+- PROXY_LISTEN_HOST and PROXY_LISTEN_PORT: public listener; defaults 0.0.0.0
+  and 9000.
+- PROXY_BACKEND_HOST and PROXY_BACKEND_PORT: private application endpoint;
+  defaults 10.30.2.10 and 9000.
+- PROXY_MAX_PER_SOURCE: simultaneous connections allowed per source; default 2.
+- PROXY_MAX_ACTIVE: global proxy connection limit; default 32.
+- PROXY_CONNECT_TIMEOUT: backend connection timeout; default 2 seconds.
+- PROXY_IDLE_TIMEOUT: maximum idle relay time; default 12 seconds.
+
+## Controlled DoS simulation
+
+simulate.sh coordinates the full experiment:
+
+1. Starts the selected Kathara lab.
+2. Starts the TCP service.
+3. Runs the baseline measurement.
+4. Starts zombie agents.
+5. Starts the DoS measurement.
+6. Sends the zombie attack command after a configurable delay, while legitimate
+   client rounds are already running.
+7. Prints the reports and cleans the lab unless requested otherwise.
+
+Run the full workflow:
+
+    ./simulate.sh dos_lab full
+
+Run only the baseline:
+
+    ./simulate.sh dos_lab baseline --plot
+
+Run only the attack phase in an already running lab:
+
+    ./simulate.sh dos_lab attack --no-start --plot
+
+Useful simulation options:
+
+- --target NODE_OR_IP: target service; default server.
+- --server NODE: node running service.py; default server.
+- --port N: TCP service port; default 9000.
+- --clients "pc_a1 pc_a2": explicit client list; default all pc_* nodes.
+- --attempts N: number of simultaneous rounds per client; default 10.
+- --timeout N: timeout of an individual measurement in seconds; default 3.
+- --delay N: pause between rounds in seconds; default 1.
+- --startup-wait N: wait after starting the Kathara lab; default 25.
+- --connections-wait N: initial wait before measurements; default 30.
+- --attack-connections N: controlled connection workers per zombie; default 40.
+- --attack-duration N: bounded attack duration in seconds; default 60, maximum 90.
+- --attack-start-delay N: delay after DoS measurements start before the C2
+  command is sent; default 1.
+- --connect-timeout N: maximum duration of one kathara exec command; default 60.
+- --connect-retries N: number of kathara exec attempts; default 3.
+- --plot: generate metric plots.
+- --keep-running: leave the Kathara lab active after the workflow.
+- --dry-run: validate generated remote scripts and print the planned workflow.
+
+The historical positional mode dos remains an alias for attack.
+
+Advanced parameters can be supplied through environment variables:
+
+    SIM_SERVER
+    SIM_PORT
+    SIM_TIMEOUT
+    SIM_DELAY
+    SIM_STARTUP_WAIT
+    SIM_CONNECTIONS_WAIT
+    SIM_ATTACK_START_DELAY
+    SIM_CONNECT_TIMEOUT
+    SIM_CONNECT_RETRIES
+    SIM_ROUTING_RETRIES
+
+## Attack timing and load model
+
+The DoS phase intentionally starts the legitimate measurement process first.
+After ATTACK_START_DELAY seconds, the attacker sends an ATTACK command to the
+zombies. This creates a short pre-attack reference at the beginning of the DoS
+plot and makes the transition visible by round.
+
+Each zombie worker keeps a TCP connection idle for a bounded cycle and
+reconnects before the server-side application timeout. This keeps pressure on
+the service for the configured attack duration rather than ending after the
+first server timeout.
+
+The included server limits concurrent application handlers. Under saturation it
+may reply BUSY, close a connection, or fail to produce pong. Therefore, the
+most meaningful DoS metric is application availability, not necessarily ICMP
+RTT or TCP connection time.
 
 
+## Measurement methodology
 
-Each node requires:
+run_connection_tests.py runs a small Python measurement program inside each
+Kathara client container. The measured values therefore exclude Docker command
+startup and host shell overhead.
 
-- `interfaces`: a list of interfaces
-- for each interface: `network`
+Each CSV row contains:
 
-Common options:
+- request_index: simultaneous request round index, not a packet number.
+- icmp_rtt_ms: ICMP echo RTT measured by ping inside the client.
+- tcp_connect_ms: TCP connect/handshake duration measured by the client socket.
+- application_response_ms: time from sending the application request to
+  receiving pong.
+- request_completion_ms: connection plus application completion time.
+- application_status and application_error: outcome of the pong request.
+- host_command_completion_ms: diagnostic host orchestration time, including
+  docker exec and the complete measurement command. It is not a network RTT.
+- experiment_elapsed_ms: elapsed experiment time used for effective duration.
 
-- `type`: `host`, `router`, `switch`, `firewall`
-- `ip`: IP address with prefix
-- `default_gateway`
-- `routes`: static routes
-- `commands`: custom commands in the `.startup` file
-- `image`: custom Docker image
-- `frr`: FRR-specific configuration
+Run measurements manually:
 
-## Generated output
+    ./run_connection_tests.py --lab dos_lab --target server --port 9000 \
+      --clients "pc_a1 pc_a2 pc_b1 pc_b2" \
+      --scenario baseline --attempts 20 --timeout 3 --delay 1 \
+      --non-interactive
 
-For each generated lab:
+Interactive mode is available when --non-interactive is omitted.
 
-- `labs/<lab_name>/lab.conf`
-- `labs/<lab_name>/<node>.startup`
-- `labs/<lab_name>/<node>/etc/frr/daemons`
-- `labs/<lab_name>/<node>/etc/frr/frr.conf`
-- `labs/<lab_name>/<node>/etc/frr/vtysh.conf`
-- optional Wireshark scripts: `start_wireshark.sh`, `sniff.sh`, `stop_wireshark.sh`
+## Results and plots
 
-## FRR support
+Results are written to:
 
-For FRRouting devices, the generator automatically creates:
+    results/connection_results_<scenario>_<timestamp>.csv
+    logs/connection_tests_<scenario>_<timestamp>.log
+    logs/<client>_<scenario>_<timestamp>.log
 
-- `daemons`
-- `frr.conf`
-- `vtysh.conf`
+Display a report:
 
-FRR can be configured in YAML with sections such as:
+    ./show_connection_results.py results/connection_results_baseline_<timestamp>.csv
 
-```yaml
-frr:
-  protocol: ospf
-  router_id: 1.1.1.1
-  area: 0
-  networks:
-    - 10.10.1.0/24
-```
+Generate plots:
 
-For BGP:
+    ./show_connection_results.py results/connection_results_dos_<timestamp>.csv --plot
 
-```yaml
-frr:
-  asn: 65001
-  router_id: 1.1.1.1
-  neighbors:
-    - ip: 10.0.12.2
-      remote_as: 65002
-  networks:
-    - 10.10.1.0/24
-```
+The report includes:
 
-## Application service
+- total, successful, and failed application requests;
+- application availability percentage;
+- timeout counts for ICMP, TCP connection, and application response;
+- effective experiment duration;
+- mean, minimum, P50, P95, and maximum for every metric;
+- per-client application statistics;
+- error breakdown by measurement stage.
 
-The server code is in `server/service.py`. The service listens on `0.0.0.0:9000` and responds to simple test requests, useful for verifying end-to-end connectivity in the lab.
+The current plot contains four panels:
 
-## Connection tests
+1. ICMP RTT by request index and client.
+2. TCP connection time by request index and client.
+3. Application response time for completed requests.
+4. Application availability by request round.
 
-- `run_connection_tests.py`: runs connectivity tests against the lab service.
-- `show_connection_results.py`: displays a summary of the test results.
+The fourth panel is essential for DoS analysis. A saturated service can reject
+requests immediately, leaving successful latency samples low while availability
+falls sharply.
 
-## Notes
+Older CSV files with elapsed_ms remain readable. They are labeled as legacy
+end-to-end measurements because they include docker exec, shell, and netcat
+overhead; they must not be interpreted as network RTT values.
 
-- Make sure Kathara is installed before running generated labs.
-- `generate_lab.sh` is the recommended convenience script for launching the generator.
+## Service protocol
+
+configs/server/service.py implements the reference TCP service. It listens on
+port 9000 by default, displays a small menu, and returns pong when it receives
+the selection 1. The measurement client sends this selection and only records
+an application success when pong is received.
+
+The service supports the following environment variables:
+
+- SERVICE_PORT: listen port; default 9000.
+- SERVICE_BACKLOG: TCP accept backlog; default 40.
+- SERVICE_MAX_ACTIVE: maximum concurrent application handlers; default 20.
+- SERVICE_CLIENT_TIMEOUT: timeout while waiting for a client selection; default
+  10 seconds.
+
+## Troubleshooting
+
+- Ensure Kathara and Docker are available before starting a simulation.
+- If clients cannot reach the server immediately after startup, increase
+  SIM_CONNECTIONS_WAIT or use --connections-wait.
+- If kathara exec is slow after startup, increase SIM_CONNECT_RETRIES or
+  SIM_CONNECT_TIMEOUT.
+- If a plot cannot be generated, install matplotlib in the Python environment
+  running show_connection_results.py.
+- If ping is not available in a client image, ICMP rows report
+  ping_not_available while TCP and application measurements can still run.
+- The generated remote scripts are checked with sh -n before they are executed
+  in a container. A syntax error is reported before the related kathara exec
+  command is attempted.
+
+## Validation
+
+Run the built-in tests:
+
+    python3 -m unittest discover -s tests -v
+
+Validate the simulation workflow without starting containers:
+
+    ./simulate.sh dos_lab full --dry-run --plot

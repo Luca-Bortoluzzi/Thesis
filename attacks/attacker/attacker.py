@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-attacker.py - controller C2 didattico per laboratorio Kathara.
-Invia agli zombie un comando di carico controllato che resta attivo fino a STOP.
+attacker.py - educational C2 controller for a Kathara lab.
+It sends a controlled load command to zombies that remains active until STOP.
 
 Uso nel container attacker:
   python3 /hostlab/attacker/attacker.py <IP_VITTIMA> <PORTA> [workers_per_zombie] [delay_sec]
@@ -66,9 +66,9 @@ def send_attack_command(zombie_ip: str, target_ip: str, target_port: int, worker
                 reply = s.recv(1024).decode(errors="ignore").strip()
             except OSError:
                 reply = ""
-        print(f"[OK] Zombie {zombie_ip}: comando inviato" + (f" - {reply}" if reply else ""))
+        print(f"[OK] Zombie {zombie_ip}: command sent" + (f" - {reply}" if reply else ""))
     except Exception as exc:
-        print(f"[ERRORE] Zombie {zombie_ip} non raggiungibile su porta {ZOMBIE_PORT}: {exc}")
+        print(f"[ERROR] Zombie {zombie_ip} is unreachable on port {ZOMBIE_PORT}: {exc}")
 
 
 def main() -> int:
@@ -83,7 +83,7 @@ def main() -> int:
 
     zombies_file = find_zombies_file()
     if not zombies_file:
-        print(f"[ERRORE] zombies.txt non trovato. Percorsi provati: {', '.join(ZOMBIES_PATHS)}")
+        print(f"[ERROR] zombies.txt not found. Paths checked: {', '.join(ZOMBIES_PATHS)}")
         print("Rigenera il lab con --zombies manual --zombies-ips '10.20.1.11,10.20.1.12,10.20.1.13'")
         return 1
 
@@ -91,12 +91,12 @@ def main() -> int:
         zombies = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
     if not zombies:
-        print(f"[ERRORE] {zombies_file} esiste ma non contiene IP zombie.")
+        print(f"[ERROR] {zombies_file} exists but contains no zombie IP addresses.")
         return 1
 
     print(f"[INFO] Zombie letti da {zombies_file}: {', '.join(zombies)}")
     print(f"[INFO] Target: {target_ip}:{target_port}; workers/zombie: {workers}; delay: {delay}s")
-    print("[INFO] Il carico resta attivo finché non esegui zombies_stop.py")
+    print("[INFO] The load remains active until zombies_stop.py is run.")
 
     threads = []
     for zombie_ip in zombies:
@@ -107,7 +107,7 @@ def main() -> int:
     for t in threads:
         t.join()
 
-    print("[OK] Comandi inviati. Stop: python3 /hostlab/attacker/zombies_stop.py")
+    print("[OK] Commands sent. Stop: python3 /hostlab/attacker/zombies_stop.py")
     return 0
 
 

