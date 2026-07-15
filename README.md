@@ -11,6 +11,7 @@ that you own or are explicitly authorized to operate.
 ## Capabilities
 
 - Generate Kathara labs from YAML topology descriptions.
+- Validate topology semantics before writing a laboratory.
 - Create host, router, switch, and firewall startup configuration.
 - Generate FRRouting configuration for OSPF, RIP, and BGP.
 - Import per-node files into generated labs.
@@ -66,6 +67,10 @@ Generate by the configuration name in configs:
 
     ./generate_lab.py client-router-server --clean
 
+Validate syntax and semantics without creating or changing a lab:
+
+    ./generate_lab.py dos_lab --validate-only
+
 Generate the DoS lab and import the server, attacker, and zombie directories:
 
     ./generate_lab.py dos_lab --force --import-dirs --zombies manual \
@@ -78,12 +83,55 @@ Important generator options:
 - --output-dir DIR: destination directory; default labs.
 - --clean: remove and recreate the selected lab directory.
 - --force: overwrite generated files.
-- --import-dirs: import directories matching node names next to the YAML file.
+- --validate-only: validate the YAML without writing files or prompting.
+- --import-dirs: import node directories next to the YAML file; every visible
+  directory must have a matching node in that topology.
 - --wireshark ask|enabled|disabled: configure real-time Wireshark integration.
 - --sniff-node NODE: attach Wireshark to the networks of a node.
 - --zombies manual|auto|disabled: manage zombies.txt generation.
 - --zombies-node NODE: node that receives zombies.txt.
 - --zombies-ips LIST: comma-separated zombie IP addresses.
+
+## Semantic YAML validation
+
+Semantic validation runs both with --validate-only and automatically before
+normal generation. Errors stop generation, while warnings identify suspicious
+but potentially intentional topology choices.
+
+The validator checks:
+
+- valid, unique interface addresses and non-overlapping collision-domain
+  subnets;
+- default gateways belonging to a local interface subnet;
+- valid node and collision-domain names, isolated single-ended networks, and
+  explicitly disabled router forwarding;
+- unique and valid FRR router IDs and supported OSPF, RIP, and BGP protocols;
+- OSPF networks connected to local interfaces;
+- existing BGP neighbor addresses, coherent remote_as values, and reciprocal
+  neighbor declarations;
+- IP addresses for attacker, zombie, server, and configured target nodes;
+- declared connection-test clients and targets;
+- when --import-dirs is used, a matching YAML node for every imported folder.
+
+Because --import-dirs selects every visible directory beside the YAML file, a
+shared configuration directory must not contain folders belonging exclusively
+to another topology. The validator reports those folders before generation.
+
+The router node type implies forwarding in generated Kathara router images;
+forwarding: false or a command that sets ip_forward=0 is treated as an error.
+Topologies containing attacker or zombie nodes must also declare their target:
+
+    simulation:
+      enabled: true
+      target_node: server
+
+Example output:
+
+    [OK] 18 nodes validated
+    [OK] 11 collision domains validated
+    [OK] IP addresses are valid and unique
+    [OK] OSPF configuration is coherent on 5 nodes
+    [OK] Semantic validation passed with 0 warning(s)
 
 ## YAML topology format
 
@@ -189,7 +237,8 @@ simulate.sh coordinates the full experiment:
 5. Starts the DoS measurement.
 6. Sends the zombie attack command after a configurable delay, while legitimate
    client rounds are already running.
-7. Prints the reports and cleans the lab unless requested otherwise.
+7. Samples the server service plus container CPU and memory metrics.
+8. Prints the reports and cleans the lab unless requested otherwise.
 
 Run the full workflow:
 
@@ -213,7 +262,6 @@ Useful simulation options:
 - --timeout N: timeout of an individual measurement in seconds; default 3.
 - --delay N: pause between rounds in seconds; default 1.
 - --startup-wait N: wait after starting the Kathara lab; default 25.
-- --connections-wait N: initial wait before measurements; default 30.
 - --attack-connections N: controlled connection workers per zombie; default 40.
 - --attack-duration N: bounded attack duration in seconds; default 60, maximum 90.
 - --attack-start-delay N: delay after DoS measurements start before the C2
@@ -233,7 +281,6 @@ Advanced parameters can be supplied through environment variables:
     SIM_TIMEOUT
     SIM_DELAY
     SIM_STARTUP_WAIT
-    SIM_CONNECTIONS_WAIT
     SIM_ATTACK_START_DELAY
     SIM_CONNECT_TIMEOUT
     SIM_CONNECT_RETRIES
@@ -255,6 +302,30 @@ The included server limits concurrent application handlers. Under saturation it
 may reply BUSY, close a connection, or fail to produce pong. Therefore, the
 most meaningful DoS metric is application availability, not necessarily ICMP
 RTT or TCP connection time.
+
+## Server-side metrics
+
+The TCP service writes a timestamped sample every second and records additional
+rows whenever a connection is accepted, rejected, answered with BUSY, or
+closed. simulate.sh labels each row with the active scenario so that server
+load can be aligned directly with client latency, availability, and timeout
+measurements.
+
+Each simulation stores two additional files in its laboratory result directory:
+
+- results/<lab>/simulation_<NNNN>/server_metrics.csv: active, accepted,
+  rejected, completed and
+  maximum simultaneous connections, BUSY responses, average connection
+  duration, and active threads.
+- results/<lab>/simulation_<NNNN>/server_container_metrics.csv: Docker CPU,
+  memory usage, memory percentage, and PID count sampled during baseline and
+  DoS measurements.
+
+At the end of a run, show_server_metrics.py prints both the final counters and
+a baseline/DoS correlation table. It can also be run manually:
+
+    python3 show_server_metrics.py results/dos_lab/simulation_0001/server_metrics.csv \
+      --container results/dos_lab/simulation_0001/server_container_metrics.csv
 
 
 ## Measurement methodology
@@ -283,23 +354,33 @@ Run measurements manually:
       --scenario baseline --attempts 20 --timeout 3 --delay 1 \
       --non-interactive
 
+The next simulation number for the selected lab is assigned automatically.
+Use --simulation N to add another scenario to a specific simulation.
+
 Interactive mode is available when --non-interactive is omitted.
 
 ## Results and plots
 
 Results are written to:
 
-    results/connection_results_<scenario>_<timestamp>.csv
-    logs/connection_tests_<scenario>_<timestamp>.log
-    logs/<client>_<scenario>_<timestamp>.log
+    results/<lab>/simulation_<NNNN>/connection_results_<scenario>.csv
+    logs/<lab>/simulation_<NNNN>/connection_tests_<scenario>.log
+    logs/<lab>/<host>/simulation_<NNNN>/<scenario>.log
+
+A complete simulate.sh run allocates one number and uses it for baseline, DoS,
+server metrics, and container metrics. A number can also be selected explicitly:
+
+    ./simulate.sh dos_lab full --simulation 7
 
 Display a report:
 
-    ./show_connection_results.py results/connection_results_baseline_<timestamp>.csv
+    ./show_connection_results.py \
+      results/dos_lab/simulation_0001/connection_results_baseline.csv
 
 Generate plots:
 
-    ./show_connection_results.py results/connection_results_dos_<timestamp>.csv --plot
+    ./show_connection_results.py \
+      results/dos_lab/simulation_0001/connection_results_dos.csv --plot
 
 The report includes:
 
@@ -340,12 +421,14 @@ The service supports the following environment variables:
 - SERVICE_MAX_ACTIVE: maximum concurrent application handlers; default 20.
 - SERVICE_CLIENT_TIMEOUT: timeout while waiting for a client selection; default
   10 seconds.
+- SERVICE_METRICS_PATH: server CSV path; default /shared/server_metrics.csv.
+- SERVICE_METRICS_SCENARIO_PATH: file containing the current scenario label;
+  default /shared/server_metrics_scenario.
+- SERVICE_METRICS_INTERVAL: periodic sample interval in seconds; default 1.
 
 ## Troubleshooting
 
 - Ensure Kathara and Docker are available before starting a simulation.
-- If clients cannot reach the server immediately after startup, increase
-  SIM_CONNECTIONS_WAIT or use --connections-wait.
 - If kathara exec is slow after startup, increase SIM_CONNECT_RETRIES or
   SIM_CONNECT_TIMEOUT.
 - If a plot cannot be generated, install matplotlib in the Python environment

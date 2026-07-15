@@ -14,9 +14,9 @@ Non-interactive usage:
         --scenario baseline --attempts 10 --timeout 2 --delay 1 --non-interactive
 
 Output:
-- results/connection_results_<scenario>_<timestamp>.csv
-- logs/connection_tests_<scenario>_<timestamp>.log
-- logs/<client>_<scenario>_<timestamp>.log
+- results/<lab>/simulation_<number>/connection_results_<scenario>.csv
+- logs/<lab>/simulation_<number>/connection_tests_<scenario>.log
+- logs/<lab>/<client>/simulation_<number>/<scenario>.log
 """
 
 from __future__ import annotations
@@ -55,10 +55,52 @@ class TestConfig:
     timeout: int
     delay: float
     lab_dir: Path | None
+    simulation_number: int | None = None
 
 
-def now_run_id() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+@dataclass(frozen=True)
+class OutputLayout:
+    lab_name: str
+    simulation_number: int
+    simulation_name: str
+    results_dir: Path
+    main_logs_dir: Path
+    hosts_logs_dir: Path
+
+
+def simulation_name(number: int) -> str:
+    if number < 1:
+        raise ValueError("Simulation number must be greater than zero.")
+    return f"simulation_{number:04d}"
+
+
+def next_simulation_number(results_root: Path, lab_name: str) -> int:
+    lab_results = results_root / lab_name
+    highest = 0
+    if lab_results.exists():
+        for path in lab_results.iterdir():
+            match = re.fullmatch(r"simulation_(\d+)", path.name)
+            if path.is_dir() and match:
+                highest = max(highest, int(match.group(1)))
+    return highest + 1
+
+
+def build_output_layout(config: TestConfig, output_dir: Path) -> OutputLayout:
+    lab_name = config.lab_dir.name if config.lab_dir else "standalone"
+    number = config.simulation_number or next_simulation_number(output_dir / "results", lab_name)
+    name = simulation_name(number)
+    return OutputLayout(
+        lab_name=lab_name,
+        simulation_number=number,
+        simulation_name=name,
+        results_dir=output_dir / "results" / lab_name / name,
+        main_logs_dir=output_dir / "logs" / lab_name / name,
+        hosts_logs_dir=output_dir / "logs" / lab_name,
+    )
+
+
+def client_log_path(layout: OutputLayout, client: str, scenario: str) -> Path:
+    return layout.hosts_logs_dir / client / layout.simulation_name / f"{scenario}.log"
 
 
 def now_iso() -> str:
@@ -459,6 +501,7 @@ def run_one_attempt(
         "timestamp": now_iso(),
         "experiment_started_at": experiment_started_at,
         "experiment_elapsed_ms": f"{(time.perf_counter() - experiment_started_perf) * 1000:.2f}",
+        "simulation": simulation_name(config.simulation_number or 1),
         "scenario": config.scenario,
         "client": client,
         "request_index": str(request_index),
@@ -542,19 +585,22 @@ def build_config(args: argparse.Namespace, context: LabContext) -> TestConfig:
         timeout=parse_int(timeout_value, "Timeout", minimum=1),
         delay=parse_float(delay_value, "Delay", minimum=0.0),
         lab_dir=context.lab_dir,
+        simulation_number=args.simulation,
     )
 
 
 def run_tests(config: TestConfig, output_dir: Path) -> Path:
-    run_id = now_run_id()
-    results_dir = output_dir / "results"
-    logs_dir = output_dir / "logs"
-    results_dir.mkdir(exist_ok=True)
-    logs_dir.mkdir(exist_ok=True)
-    csv_path = results_dir / f"connection_results_{config.scenario}_{run_id}.csv"
-    main_log = logs_dir / f"connection_tests_{config.scenario}_{run_id}.log"
+    layout = build_output_layout(config, output_dir)
+    config.simulation_number = layout.simulation_number
+    layout.results_dir.mkdir(parents=True, exist_ok=True)
+    layout.main_logs_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = layout.results_dir / f"connection_results_{config.scenario}.csv"
+    main_log = layout.main_logs_dir / f"connection_tests_{config.scenario}.log"
+    main_log.unlink(missing_ok=True)
 
     write_log(main_log, f"[INFO] Output dir: {output_dir}")
+    write_log(main_log, f"[INFO] Lab: {layout.lab_name}")
+    write_log(main_log, f"[INFO] Simulation: {layout.simulation_name}")
     if config.lab_dir:
         write_log(main_log, f"[INFO] Selected lab: {config.lab_dir}")
     write_log(main_log, f"[INFO] Scenario: {config.scenario}")
@@ -574,7 +620,8 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
     client_to_container: dict[str, str] = {}
     for client in config.clients:
         container = find_kathara_container(client, containers)
-        client_log = logs_dir / f"{client}_{config.scenario}_{run_id}.log"
+        client_log = client_log_path(layout, client, config.scenario)
+        client_log.unlink(missing_ok=True)
         if not container:
             message = f"[ERROR] Container not found for node: {client}"
             write_log(main_log, message)
@@ -589,7 +636,7 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
 
     fieldnames = [
         "timestamp", "experiment_started_at", "experiment_elapsed_ms",
-        "scenario", "client", "request_index", "target_input", "target", "port",
+        "simulation", "scenario", "client", "request_index", "target_input", "target", "port",
         "status", "icmp_status", "icmp_rtt_ms", "icmp_error",
         "tcp_status", "tcp_connect_ms", "tcp_error",
         "application_status", "application_response_ms", "request_completion_ms",
@@ -618,7 +665,7 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
                 }
                 for future in as_completed(future_map):
                     client = future_map[future]
-                    client_log = logs_dir / f"{client}_{config.scenario}_{run_id}.log"
+                    client_log = client_log_path(layout, client, config.scenario)
                     try:
                         row = future.result()
                     except Exception as exc:
@@ -626,6 +673,7 @@ def run_tests(config: TestConfig, output_dir: Path) -> Path:
                             "timestamp": now_iso(),
                             "experiment_started_at": experiment_started_at,
                             "experiment_elapsed_ms": f"{(time.perf_counter() - experiment_started_perf) * 1000:.2f}",
+                            "simulation": layout.simulation_name,
                             "scenario": config.scenario,
                             "client": client,
                             "request_index": str(attempt),
@@ -690,6 +738,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attempts", type=int, default=10, help="Number of simultaneous rounds")
     parser.add_argument("--timeout", type=int, default=3, help="Timeout for each measurement in seconds")
     parser.add_argument("--delay", type=float, default=1.0, help="Pause between simultaneous rounds")
+    parser.add_argument(
+        "--simulation",
+        type=int,
+        help="Simulation number. If omitted, the next number for the selected lab is used.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path.cwd(),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; requires at least target and port")
     return parser.parse_args()
 
@@ -699,8 +758,10 @@ def main() -> int:
         args = parse_args()
         interactive = not args.non_interactive
         context = resolve_lab_context(args, interactive=interactive)
+        if args.simulation is not None and args.simulation < 1:
+            raise ValueError("--simulation must be greater than zero.")
         config = build_config(args, context)
-        output_dir = Path.cwd()
+        output_dir = args.output_dir.resolve()
         csv_path = run_tests(config, output_dir)
         print("")
         print("To display the report:")

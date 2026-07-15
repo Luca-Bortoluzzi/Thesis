@@ -16,7 +16,6 @@ ATTEMPTS="${SIM_ATTEMPTS:-10}"
 TIMEOUT="${SIM_TIMEOUT:-3}"
 DELAY="${SIM_DELAY:-1}"
 STARTUP_WAIT="${SIM_STARTUP_WAIT:-25}"
-CONNECTIONS_WAIT="${SIM_CONNECTIONS_WAIT:-30}"
 ATTACK_CONNECTIONS="${SIM_ATTACK_CONNECTIONS:-40}"
 ATTACK_DURATION="${SIM_ATTACK_DURATION:-60}"
 ATTACK_START_DELAY="${SIM_ATTACK_START_DELAY:-1}"
@@ -26,9 +25,12 @@ NO_START="${SIM_NO_START:-0}"
 KEEP_RUNNING="${SIM_KEEP_RUNNING:-0}"
 DRY_RUN="${SIM_DRY_RUN:-0}"
 PLOT="${SIM_PLOT:-0}"
+SIMULATION_NUMBER="${SIM_SIMULATION:-}"
 
 LAB_DIR=""
 STARTED_HERE=0
+STATS_PID=""
+METRICS_COLLECTED=0
 
 log() { printf '[SIM] %s\n' "$*"; }
 die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -53,12 +55,12 @@ Main options:
   --timeout N              measurement timeout, default: 3 [SIM_TIMEOUT]
   --delay N                delay between rounds, default: 1 [SIM_DELAY]
   --startup-wait N         default: 25 [SIM_STARTUP_WAIT]
-  --connections-wait N     default: 30 [SIM_CONNECTIONS_WAIT]
   --attack-connections N   connections per zombie, default: 40
   --attack-duration N      default: 60, maximum: 90
   --attack-start-delay N   default: 1 [SIM_ATTACK_START_DELAY]
   --connect-timeout N      default: 60 [SIM_CONNECT_TIMEOUT]
   --connect-retries N      default: 3 [SIM_CONNECT_RETRIES]
+  --simulation N           use this simulation number; default: next available
   --no-start               do not run kathara lstart
   --keep-running           do not run kathara lclean
   --plot                   generate result plots
@@ -67,8 +69,8 @@ Main options:
 
 Advanced environment parameters:
   SIM_SERVER, SIM_PORT, SIM_TIMEOUT, SIM_DELAY, SIM_STARTUP_WAIT,
-  SIM_CONNECTIONS_WAIT, SIM_ATTACK_START_DELAY, SIM_CONNECT_TIMEOUT,
-  SIM_CONNECT_RETRIES
+  SIM_ATTACK_START_DELAY, SIM_CONNECT_TIMEOUT, SIM_CONNECT_RETRIES,
+  SIM_SIMULATION
 EOF
 }
 
@@ -95,7 +97,6 @@ while [[ $# -gt 0 ]]; do
         --clients) need_value "$@"; CLIENTS="$2"; shift 2 ;;
         --attempts) need_value "$@"; ATTEMPTS="$2"; shift 2 ;;
         --startup-wait) need_value "$@"; STARTUP_WAIT="$2"; shift 2 ;;
-        --connections-wait) need_value "$@"; CONNECTIONS_WAIT="$2"; shift 2 ;;
         --attack-connections) need_value "$@"; ATTACK_CONNECTIONS="$2"; shift 2 ;;
         --attack-duration) need_value "$@"; ATTACK_DURATION="$2"; shift 2 ;;
         --attack-start-delay) need_value "$@"; ATTACK_START_DELAY="$2"; shift 2 ;;
@@ -104,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --delay) need_value "$@"; DELAY="$2"; shift 2 ;;
         --connect-timeout) need_value "$@"; CONNECT_TIMEOUT="$2"; shift 2 ;;
         --connect-retries) need_value "$@"; CONNECT_RETRIES="$2"; shift 2 ;;
+        --simulation) need_value "$@"; SIMULATION_NUMBER="$2"; shift 2 ;;
         --no-start) NO_START=1; shift ;;
         --keep-running) KEEP_RUNNING=1; shift ;;
         --plot) PLOT=1; shift ;;
@@ -121,9 +123,14 @@ fi
 [[ "$MODE" == "full" || "$MODE" == "baseline" || "$MODE" == "attack" ]] || \
     die "Invalid mode: $MODE"
 
-for value in "$PORT" "$ATTEMPTS" "$TIMEOUT" "$STARTUP_WAIT" "$CONNECTIONS_WAIT" "$ATTACK_CONNECTIONS" "$ATTACK_DURATION" "$ATTACK_START_DELAY" "$CONNECT_TIMEOUT" "$CONNECT_RETRIES"; do
+for value in "$PORT" "$ATTEMPTS" "$TIMEOUT" "$STARTUP_WAIT" "$ATTACK_CONNECTIONS" "$ATTACK_DURATION" "$ATTACK_START_DELAY" "$CONNECT_TIMEOUT" "$CONNECT_RETRIES"; do
     [[ "$value" =~ ^[0-9]+$ ]] || die "Numeric parameters must be non-negative integers."
 done
+if [[ -n "$SIMULATION_NUMBER" ]]; then
+    [[ "$SIMULATION_NUMBER" =~ ^[0-9]+$ ]] || die "Simulation number must be a positive integer."
+    SIMULATION_NUMBER=$((10#$SIMULATION_NUMBER))
+    (( SIMULATION_NUMBER > 0 )) || die "Simulation number must be greater than zero."
+fi
 (( PORT >= 1 && PORT <= 65535 )) || die "Invalid port: $PORT"
 (( ATTEMPTS > 0 && TIMEOUT > 0 && ATTACK_CONNECTIONS > 0 && ATTACK_DURATION > 0 && CONNECT_TIMEOUT > 0 && CONNECT_RETRIES > 0 )) || \
     die "Main numeric parameters must be greater than zero."
@@ -140,6 +147,30 @@ find_lab() {
 }
 
 LAB_DIR="$(find_lab)" || die "Generated lab not found: $LAB"
+LAB_NAME="$(basename "$LAB_DIR")"
+RESULTS_LAB_DIR="$ROOT/results/$LAB_NAME"
+
+next_simulation_number() {
+    local path suffix number highest=0
+    shopt -s nullglob
+    for path in "$RESULTS_LAB_DIR"/simulation_*; do
+        [[ -d "$path" ]] || continue
+        suffix="${path##*/simulation_}"
+        [[ "$suffix" =~ ^[0-9]+$ ]] || continue
+        number=$((10#$suffix))
+        (( number > highest )) && highest="$number"
+    done
+    shopt -u nullglob
+    printf '%s' "$((highest + 1))"
+}
+
+[[ -n "$SIMULATION_NUMBER" ]] || SIMULATION_NUMBER="$(next_simulation_number)"
+printf -v SIMULATION_NAME 'simulation_%04d' "$SIMULATION_NUMBER"
+SIMULATION_DIR="$RESULTS_LAB_DIR/$SIMULATION_NAME"
+SERVER_METRICS_SOURCE="$LAB_DIR/shared/server_metrics.csv"
+SERVER_SCENARIO_FILE="$LAB_DIR/shared/server_metrics_scenario"
+SERVER_METRICS_RESULT="$SIMULATION_DIR/server_metrics.csv"
+CONTAINER_METRICS_RESULT="$SIMULATION_DIR/server_container_metrics.csv"
 
 mapfile -t NODES < <(
     sed -nE 's/^[[:space:]]*([A-Za-z0-9_.-]+)\[[^]]+\].*/\1/p' "$LAB_DIR/lab.conf" |
@@ -289,9 +320,41 @@ cleanup_remote_scripts() {
     shopt -u nullglob
 }
 
+stop_container_sampler() {
+    if [[ -n "$STATS_PID" ]]; then
+        kill "$STATS_PID" 2>/dev/null || true
+        wait "$STATS_PID" 2>/dev/null || true
+        STATS_PID=""
+    fi
+}
+
+container_metrics_has_samples() {
+    [[ -f "$CONTAINER_METRICS_RESULT" ]] || return 1
+    (( $(wc -l < "$CONTAINER_METRICS_RESULT") > 1 ))
+}
+
+collect_metrics() {
+    (( METRICS_COLLECTED )) && return 0
+    METRICS_COLLECTED=1
+    (( DRY_RUN )) && return 0
+
+    mkdir -p "$SIMULATION_DIR"
+    if [[ -s "$SERVER_METRICS_SOURCE" ]]; then
+        cp "$SERVER_METRICS_SOURCE" "$SERVER_METRICS_RESULT"
+        log "Server metrics: $SERVER_METRICS_RESULT"
+    else
+        log "Server metrics unavailable: $SERVER_METRICS_SOURCE is empty or missing."
+    fi
+    if container_metrics_has_samples; then
+        log "Container metrics: $CONTAINER_METRICS_RESULT"
+    fi
+}
+
 cleanup() {
     local rc=$?
     trap - EXIT INT TERM
+    stop_container_sampler
+    collect_metrics
     cleanup_remote_scripts
     if (( STARTED_HERE && ! KEEP_RUNNING )); then
         log "Cleaning up the Kathara lab."
@@ -307,17 +370,25 @@ trap 'exit 130' INT TERM
 
 if (( ! DRY_RUN )); then
     command -v kathara >/dev/null || die "kathara command not found."
+    command -v docker >/dev/null || die "docker command not found."
     command -v timeout >/dev/null || die "timeout command not found."
 fi
 
 log "Lab: $LAB_DIR"
+log "Simulation: $SIMULATION_NAME"
+log "Results: $SIMULATION_DIR"
 log "Mode: $MODE"
 log "Server: $SERVER"
 log "Target: $TARGET_IP:$PORT"
 log "Client: $CLIENTS"
 log "Zombie: ${ZOMBIES[*]} (${ZOMBIE_IPS[*]})"
 
-(( DRY_RUN )) || mkdir -p "$LAB_DIR/shared"
+if (( ! DRY_RUN )); then
+    mkdir -p "$LAB_DIR/shared" "$SIMULATION_DIR"
+    : > "$SERVER_METRICS_SOURCE"
+    printf 'idle\n' > "$SERVER_SCENARIO_FILE"
+    printf 'timestamp,scenario,container,cpu_percent,memory_usage,memory_percent,pids\n' > "$CONTAINER_METRICS_RESULT"
+fi
 
 if (( DRY_RUN )); then
     log "Would update $LAB_DIR/$ATTACKER/zombies.txt"
@@ -339,6 +410,7 @@ start_server() {
 SCRIPT=
 LOG=/tmp/service.log
 SERVICE_PORT='$PORT'
+METRICS=/shared/server_metrics.csv
 
 for candidate in /hostlab/service.py '/hostlab/$SERVER/service.py' /shared/service.py; do
     [ -f "\$candidate" ] && SCRIPT="\$candidate" && break
@@ -351,10 +423,12 @@ service_ready() {
 
 if service_ready; then
     echo '[OK] service.py is already active and reachable'
+    sleep 1
+    [ -s "\$METRICS" ] || echo '[WARN] service.py is active but has not produced structured metrics'
     return 0
 fi
 
-SERVICE_PORT='$PORT' SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 nohup python3 -u "\$SCRIPT" > "\$LOG" 2>&1 < /dev/null &
+SERVICE_PORT='$PORT' SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 SERVICE_METRICS_PATH="\$METRICS" SERVICE_METRICS_SCENARIO_PATH=/shared/server_metrics_scenario nohup python3 -u "\$SCRIPT" > "\$LOG" 2>&1 < /dev/null &
 sleep 1
 service_ready || {
     echo '[ERROR] service.py did not start'
@@ -366,22 +440,69 @@ SIM_SERVER_BODY
 }
 
 latest_csv() {
-    local scenario="$1" file latest=""
-    shopt -s nullglob
-    for file in "$ROOT"/results/connection_results_"$scenario"_*.csv; do
-        [[ -z "$latest" || "$file" -nt "$latest" ]] && latest="$file"
+    local scenario="$1" file
+    file="$SIMULATION_DIR/connection_results_${scenario}.csv"
+    if [[ -f "$file" ]]; then
+        printf '%s' "$file"
+    fi
+    return 0
+}
+
+find_server_container() {
+    local container
+    while IFS= read -r container; do
+        case "$container" in
+            kathara_*_"$SERVER"_*) printf '%s' "$container"; return 0 ;;
+        esac
+    done < <(docker ps --format '{{.Names}}' 2>/dev/null)
+    return 1
+}
+
+set_server_scenario() {
+    local scenario="$1"
+    (( DRY_RUN )) && return 0
+    printf '%s\n' "$scenario" > "$SERVER_SCENARIO_FILE"
+}
+
+start_container_sampler() {
+    local scenario="$1" container initial_lines current_lines attempt
+    (( DRY_RUN )) && return 0
+    container="$(find_server_container || true)"
+    if [[ -z "$container" ]]; then
+        log "Container for server node '$SERVER' not found; CPU and memory will not be sampled."
+        return 0
+    fi
+
+    initial_lines="$(wc -l < "$CONTAINER_METRICS_RESULT")"
+    (
+        local sample cpu memory memory_percent pids timestamp
+        while true; do
+            sample="$(docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.PIDs}}' "$container" 2>/dev/null)" || break
+            [[ -n "$sample" ]] || break
+            IFS='|' read -r cpu memory memory_percent pids <<< "$sample"
+            timestamp="$(date '+%Y-%m-%dT%H:%M:%S.%3N%:z')"
+            printf '"%s","%s","%s","%s","%s","%s","%s"\n' \
+                "$timestamp" "$scenario" "$container" "$cpu" "$memory" "$memory_percent" "$pids" \
+                >> "$CONTAINER_METRICS_RESULT"
+            sleep 1
+        done
+    ) &
+    STATS_PID=$!
+
+    for (( attempt = 1; attempt <= 30; attempt++ )); do
+        current_lines="$(wc -l < "$CONTAINER_METRICS_RESULT")"
+        (( current_lines > initial_lines )) && return 0
+        sleep 0.1
     done
-    shopt -u nullglob
-    printf '%s' "$latest"
+    log "The first Docker metrics sample was not ready after 3 seconds."
 }
 
 measure() {
-    local scenario="$1" wait_seconds="${2:-$CONNECTIONS_WAIT}" csv
-    if (( wait_seconds > 0 )); then
-        log "Waiting ${wait_seconds}s before connections ($scenario)."
-        (( DRY_RUN )) || sleep "$wait_seconds"
+    local scenario="$1" sampler_ready="${2:-0}" csv measurement_rc=0
+    if (( ! sampler_ready )); then
+        set_server_scenario "$scenario"
+        start_container_sampler "$scenario"
     fi
-
     run "$ROOT/run_connection_tests.py" \
         --lab "$LAB_DIR" \
         --target "$TARGET" \
@@ -391,7 +512,11 @@ measure() {
         --attempts "$ATTEMPTS" \
         --timeout "$TIMEOUT" \
         --delay "$DELAY" \
-        --non-interactive
+        --simulation "$SIMULATION_NUMBER" \
+        --output-dir "$ROOT" \
+        --non-interactive || measurement_rc=$?
+    stop_container_sampler
+    (( measurement_rc == 0 )) || return "$measurement_rc"
 
     (( DRY_RUN )) && return 0
     csv="$(latest_csv "$scenario")"
@@ -448,20 +573,17 @@ SIM_ATTACK_BODY
 }
 
 measure_during_attack() {
-    local wait_seconds="$1" attack_pid measure_rc=0 attack_rc=0
-
-    if (( wait_seconds > 0 )); then
-        log "Waiting ${wait_seconds}s before connections (dos)."
-        (( DRY_RUN )) || sleep "$wait_seconds"
-    fi
+    local attack_pid measure_rc=0 attack_rc=0
 
     log "Starting DoS measurements; zombies will start after ${ATTACK_START_DELAY}s."
     if (( DRY_RUN )); then
-        measure dos 0
+        measure dos
         start_attack
         return 0
     fi
 
+    set_server_scenario dos
+    start_container_sampler dos
     (
         trap - EXIT INT TERM
         (( ATTACK_START_DELAY == 0 )) || sleep "$ATTACK_START_DELAY"
@@ -469,7 +591,7 @@ measure_during_attack() {
     ) &
     attack_pid=$!
 
-    measure dos 0 || measure_rc=$?
+    measure dos 1 || measure_rc=$?
     wait "$attack_pid" || attack_rc=$?
 
     (( attack_rc == 0 )) || die "Attack startup failed (exit code $attack_rc)."
@@ -481,10 +603,15 @@ start_server
 
 if [[ "$MODE" != "baseline" ]]; then
     start_zombies
-    if [[ "$MODE" == "attack" ]]; then
-        measure_during_attack "$CONNECTIONS_WAIT"
+    measure_during_attack
+fi
+
+collect_metrics
+if [[ -s "$SERVER_METRICS_RESULT" ]]; then
+    if container_metrics_has_samples; then
+        run python3 "$ROOT/show_server_metrics.py" "$SERVER_METRICS_RESULT" --container "$CONTAINER_METRICS_RESULT"
     else
-        measure_during_attack 0
+        run python3 "$ROOT/show_server_metrics.py" "$SERVER_METRICS_RESULT"
     fi
 fi
 

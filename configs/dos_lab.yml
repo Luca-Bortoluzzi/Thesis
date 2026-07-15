@@ -14,6 +14,10 @@ metadata:
   email: "luca.bortoluzzi921@edu.unito.it"
   web: "http://www.kathara.org/"
 
+simulation:
+  enabled: true
+  target_node: server
+
 nodes:
 
   # =========================
@@ -129,7 +133,7 @@ nodes:
         ip: 10.30.1.10/24
     default_gateway: 10.30.1.1
     commands:
-      - SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 python3 /hostlab/service.py > /tmp/service.log 2>&1 &
+      - SERVICE_MAX_ACTIVE=20 SERVICE_BACKLOG=20 SERVICE_METRICS_PATH=/shared/server_metrics.csv SERVICE_METRICS_SCENARIO_PATH=/shared/server_metrics_scenario python3 /hostlab/server/service.py > /tmp/service.log 2>&1 &
 
   # =========================
   # Enterprise routers

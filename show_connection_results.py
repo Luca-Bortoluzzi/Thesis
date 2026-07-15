@@ -31,7 +31,7 @@ def find_latest_csv(lab_dir: Path) -> Path | None:
     results_dir = lab_dir / "results"
     if not results_dir.exists():
         return None
-    files = sorted(results_dir.glob("connection_results_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(results_dir.rglob("connection_results_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
     return files[0] if files else None
 
 

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""
-Educational TCP service for availability testing.
-It exposes measurable saturation effects through:
-- a maximum number of concurrent application handlers;
-- a testable 'pong' response;
-- overload logging.
-"""
+"""Educational TCP application service used behind the mitigation proxy."""
+
 import os
 import socket
 import threading
+import time
 import traceback
+
+from server_metrics import ServerMetrics
 
 HOST = "0.0.0.0"
 PORT = int(os.getenv("SERVICE_PORT", "9000"))
@@ -18,8 +16,7 @@ MAX_ACTIVE_CLIENTS = int(os.getenv("SERVICE_MAX_ACTIVE", "20"))
 CLIENT_TIMEOUT = int(os.getenv("SERVICE_CLIENT_TIMEOUT", "10"))
 
 slots = threading.BoundedSemaphore(MAX_ACTIVE_CLIENTS)
-active_lock = threading.Lock()
-active_clients = 0
+metrics = ServerMetrics()
 
 
 def safe_send(conn, data: bytes) -> bool:
@@ -31,17 +28,18 @@ def safe_send(conn, data: bytes) -> bool:
 
 
 def handle_client(conn, addr):
-    global active_clients
+    started_at = time.monotonic()
+    tracked = addr[0] not in {"127.0.0.1", "::1"}
     acquired = slots.acquire(blocking=False)
     if not acquired:
         print(f"[OVERLOAD] Connection rejected from {addr}: application limit reached", flush=True)
-        safe_send(conn, b"BUSY\n")
+        busy_sent = safe_send(conn, b"BUSY\n")
+        if tracked:
+            metrics.rejected(busy_sent)
         conn.close()
         return
 
-    with active_lock:
-        active_clients += 1
-        current = active_clients
+    current = metrics.accepted() if tracked else metrics.current_active()
     print(f"[CONN] {addr} active. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
 
     try:
@@ -73,7 +71,7 @@ def handle_client(conn, addr):
         if data == "1":
             safe_send(conn, b"\npong\n")
         elif data == "2":
-            safe_send(conn, b"\nDMZ server - TCP service active\n")
+            safe_send(conn, b"\nPrivate backend server - TCP service active\n")
         elif data == "3":
             safe_send(conn, b"\nClosing connection\n")
         else:
@@ -87,21 +85,24 @@ def handle_client(conn, addr):
             conn.close()
         except OSError:
             pass
-        with active_lock:
-            active_clients -= 1
-            current = active_clients
+        current = metrics.closed(time.monotonic() - started_at) if tracked else metrics.current_active()
         slots.release()
         print(f"[DISC] {addr} closed. Active={current}/{MAX_ACTIVE_CLIENTS}", flush=True)
 
 
 def main():
+    metrics.start()
     while True:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
                 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 server.bind((HOST, PORT))
                 server.listen(BACKLOG)
-                print(f"[OK] TCP service active on {HOST}:{PORT}; backlog={BACKLOG}; max_active={MAX_ACTIVE_CLIENTS}", flush=True)
+                print(
+                    f"[OK] TCP service active on {HOST}:{PORT}; "
+                    f"backlog={BACKLOG}; max_active={MAX_ACTIVE_CLIENTS}",
+                    flush=True,
+                )
                 while True:
                     try:
                         conn, addr = server.accept()

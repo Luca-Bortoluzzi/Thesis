@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from src_gen_lab.Lexer import load_yaml
-from src_gen_lab.Parser import validate_config, parse_yaml_configuration
+from src_gen_lab.Parser import (
+    SemanticValidationError,
+    parse_yaml_configuration,
+    print_semantic_report,
+    validate_config,
+    validate_semantics,
+)
 
 FRR_DEVICE_TYPES = {"router", "switch", "firewall"}
 BASE_IMAGE = "kathara/base"
@@ -933,6 +939,13 @@ def generate_lab(
 ) -> tuple[Path, list[str], bool, list[str]]:
     config = load_yaml(config_path)
     validate_config(config)
+    semantic_report = validate_semantics(
+        config,
+        config_path=config_path,
+        import_dirs=import_dirs,
+    )
+    if not semantic_report.valid:
+        raise SemanticValidationError(semantic_report)
 
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
@@ -1022,6 +1035,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate YAML syntax and semantics without generating or modifying a lab.",
+    )
+
+    parser.add_argument(
         "--wireshark-networks",
         default=None,
         help=(
@@ -1088,7 +1107,19 @@ def main() -> int:
     args = parse_args()
 
     try:
-        config_path, _ = parse_yaml_configuration(args.lab, args.config_dir)
+        config_path, config = parse_yaml_configuration(args.lab, args.config_dir)
+        semantic_report = validate_semantics(
+            config,
+            config_path=config_path,
+            import_dirs=args.import_dirs,
+        )
+        print(f"[OK] Configuration read: {config_path}")
+        print_semantic_report(semantic_report)
+        if not semantic_report.valid:
+            return 1
+        if args.validate_only:
+            return 0
+
         lab_dir, selected_wireshark_networks, wireshark_generated, imported_node_dirs = generate_lab(
             config_path=config_path,
             output_dir=args.output_dir,
@@ -1102,7 +1133,6 @@ def main() -> int:
             zombies_ips=args.zombies_ips,
         )
 
-        print(f"[OK] Configuration read: {config_path}")
         print(f"[OK] Lab generated: {lab_dir}")
         print("")
         print("To start:")
