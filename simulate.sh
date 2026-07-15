@@ -21,6 +21,7 @@ ATTACK_DURATION="${SIM_ATTACK_DURATION:-60}"
 ATTACK_START_DELAY="${SIM_ATTACK_START_DELAY:-1}"
 CONNECT_TIMEOUT="${SIM_CONNECT_TIMEOUT:-60}"
 CONNECT_RETRIES="${SIM_CONNECT_RETRIES:-3}"
+ROUTING_TIMEOUT="${SIM_ROUTING_TIMEOUT:-120}"
 NO_START="${SIM_NO_START:-0}"
 KEEP_RUNNING="${SIM_KEEP_RUNNING:-0}"
 DRY_RUN="${SIM_DRY_RUN:-0}"
@@ -60,6 +61,7 @@ Main options:
   --attack-start-delay N   default: 1 [SIM_ATTACK_START_DELAY]
   --connect-timeout N      default: 60 [SIM_CONNECT_TIMEOUT]
   --connect-retries N      default: 3 [SIM_CONNECT_RETRIES]
+  --routing-timeout N      max wait for client routes, default: 120
   --simulation N           use this simulation number; default: next available
   --no-start               do not run kathara lstart
   --keep-running           do not run kathara lclean
@@ -70,7 +72,7 @@ Main options:
 Advanced environment parameters:
   SIM_SERVER, SIM_PORT, SIM_TIMEOUT, SIM_DELAY, SIM_STARTUP_WAIT,
   SIM_ATTACK_START_DELAY, SIM_CONNECT_TIMEOUT, SIM_CONNECT_RETRIES,
-  SIM_SIMULATION
+  SIM_ROUTING_TIMEOUT, SIM_SIMULATION
 EOF
 }
 
@@ -105,6 +107,7 @@ while [[ $# -gt 0 ]]; do
         --delay) need_value "$@"; DELAY="$2"; shift 2 ;;
         --connect-timeout) need_value "$@"; CONNECT_TIMEOUT="$2"; shift 2 ;;
         --connect-retries) need_value "$@"; CONNECT_RETRIES="$2"; shift 2 ;;
+        --routing-timeout) need_value "$@"; ROUTING_TIMEOUT="$2"; shift 2 ;;
         --simulation) need_value "$@"; SIMULATION_NUMBER="$2"; shift 2 ;;
         --no-start) NO_START=1; shift ;;
         --keep-running) KEEP_RUNNING=1; shift ;;
@@ -123,7 +126,7 @@ fi
 [[ "$MODE" == "full" || "$MODE" == "baseline" || "$MODE" == "attack" ]] || \
     die "Invalid mode: $MODE"
 
-for value in "$PORT" "$ATTEMPTS" "$TIMEOUT" "$STARTUP_WAIT" "$ATTACK_CONNECTIONS" "$ATTACK_DURATION" "$ATTACK_START_DELAY" "$CONNECT_TIMEOUT" "$CONNECT_RETRIES"; do
+for value in "$PORT" "$ATTEMPTS" "$TIMEOUT" "$STARTUP_WAIT" "$ATTACK_CONNECTIONS" "$ATTACK_DURATION" "$ATTACK_START_DELAY" "$CONNECT_TIMEOUT" "$CONNECT_RETRIES" "$ROUTING_TIMEOUT"; do
     [[ "$value" =~ ^[0-9]+$ ]] || die "Numeric parameters must be non-negative integers."
 done
 if [[ -n "$SIMULATION_NUMBER" ]]; then
@@ -132,7 +135,7 @@ if [[ -n "$SIMULATION_NUMBER" ]]; then
     (( SIMULATION_NUMBER > 0 )) || die "Simulation number must be greater than zero."
 fi
 (( PORT >= 1 && PORT <= 65535 )) || die "Invalid port: $PORT"
-(( ATTEMPTS > 0 && TIMEOUT > 0 && ATTACK_CONNECTIONS > 0 && ATTACK_DURATION > 0 && CONNECT_TIMEOUT > 0 && CONNECT_RETRIES > 0 )) || \
+(( ATTEMPTS > 0 && TIMEOUT > 0 && ATTACK_CONNECTIONS > 0 && ATTACK_DURATION > 0 && CONNECT_TIMEOUT > 0 && CONNECT_RETRIES > 0 && ROUTING_TIMEOUT > 0 )) || \
     die "Main numeric parameters must be greater than zero."
 (( ATTACK_DURATION <= 90 )) || { log "Attack duration capped at 90s."; ATTACK_DURATION=90; }
 
@@ -448,14 +451,60 @@ latest_csv() {
     return 0
 }
 
-find_server_container() {
-    local container
+find_node_container() {
+    local node="$1" container
     while IFS= read -r container; do
         case "$container" in
-            kathara_*_"$SERVER"_*) printf '%s' "$container"; return 0 ;;
+            kathara_*_"$node"_*) printf '%s' "$container"; return 0 ;;
         esac
     done < <(docker ps --format '{{.Names}}' 2>/dev/null)
     return 1
+}
+
+find_server_container() {
+    find_node_container "$SERVER"
+}
+
+wait_for_client_routes() {
+    local deadline=$((SECONDS + ROUTING_TIMEOUT)) client container
+    local -a pending=()
+
+    if (( DRY_RUN )); then
+        log "Would verify reachability of $TARGET_IP from all clients."
+        return 0
+    fi
+
+    log "Checking routes to $TARGET_IP from all clients."
+    while true; do
+        pending=()
+        for client in $CLIENTS; do
+            container="$(find_node_container "$client" || true)"
+            if [[ -z "$container" ]]; then
+                pending+=("$client:no-container")
+            elif ! docker exec "$container" ping -n -c 1 -W 1 "$TARGET_IP" >/dev/null 2>&1; then
+                pending+=("$client")
+            fi
+        done
+
+        if (( ${#pending[@]} == 0 )); then
+            log "Routing ready: $TARGET_IP is reachable from all clients."
+            return 0
+        fi
+
+        if (( SECONDS >= deadline )); then
+            log "Clients still unable to reach $TARGET_IP: ${pending[*]}"
+            for client in $CLIENTS; do
+                container="$(find_node_container "$client" || true)"
+                [[ -n "$container" ]] || continue
+                printf '[SIM] Route on %s: ' "$client"
+                docker exec "$container" ip route get "$TARGET_IP" 2>&1 || true
+            done
+            die "Routing did not become ready within ${ROUTING_TIMEOUT}s."
+        fi
+
+        log "Waiting for routing convergence; pending: ${pending[*]}"
+        sleep 2
+    done
 }
 
 set_server_scenario() {
@@ -599,6 +648,7 @@ measure_during_attack() {
 }
 
 start_server
+wait_for_client_routes
 [[ "$MODE" == "attack" ]] || measure baseline
 
 if [[ "$MODE" != "baseline" ]]; then

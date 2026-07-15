@@ -474,35 +474,6 @@ def generate_startup(node_name: str, node_data: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def candidate_import_directories(config_path: Path) -> list[Path]:
-    config_dir = config_path.parent
-    return [
-        path
-        for path in sorted(config_dir.iterdir(), key=lambda item: item.name.lower())
-        if path.is_dir()
-        and path.name not in {"__pycache__"}
-        and not path.name.startswith(".")
-    ]
-
-
-def validate_import_directories(config_path: Path, nodes: dict[str, Any], enabled: bool) -> None:
-    if not enabled:
-        return
-
-    node_names = set(nodes)
-    invalid_dirs = [
-        path.name
-        for path in candidate_import_directories(config_path)
-        if path.name not in node_names
-    ]
-    if invalid_dirs:
-        raise ValueError(
-            "Directories to import without a corresponding node in the lab: "
-            + ", ".join(invalid_dirs)
-            + ". Rename/remove the directory or add a node with the same name to the YAML file."
-        )
-
-
 def copy_node_directories(
     config_path: Path,
     lab_dir: Path,
@@ -517,8 +488,6 @@ def copy_node_directories(
     """
     if not enabled:
         return []
-
-    validate_import_directories(config_path, nodes, enabled=True)
 
     config_dir = config_path.parent
     imported: list[str] = []
@@ -949,7 +918,6 @@ def generate_lab(
 
     lab_name = str(config["lab_name"])
     nodes = config["nodes"]
-    validate_import_directories(config_path, nodes, enabled=import_dirs)
     selected_wireshark_networks = choose_wireshark_networks(config, wireshark_networks, wireshark_mode)
 
     if selected_wireshark_networks and WIRESHARK_NODE_NAME in nodes:

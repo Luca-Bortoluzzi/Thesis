@@ -84,8 +84,8 @@ Important generator options:
 - --clean: remove and recreate the selected lab directory.
 - --force: overwrite generated files.
 - --validate-only: validate the YAML without writing files or prompting.
-- --import-dirs: import node directories next to the YAML file; every visible
-  directory must have a matching node in that topology.
+- --import-dirs: import directories next to the YAML file whose names match
+  nodes in the topology; unmatched directories are reported and skipped.
 - --wireshark ask|enabled|disabled: configure real-time Wireshark integration.
 - --sniff-node NODE: attach Wireshark to the networks of a node.
 - --zombies manual|auto|disabled: manage zombies.txt generation.
@@ -111,11 +111,12 @@ The validator checks:
   neighbor declarations;
 - IP addresses for attacker, zombie, server, and configured target nodes;
 - declared connection-test clients and targets;
-- when --import-dirs is used, a matching YAML node for every imported folder.
+- when --import-dirs is used, folders without a matching YAML node, which are
+  reported as warnings and skipped.
 
-Because --import-dirs selects every visible directory beside the YAML file, a
-shared configuration directory must not contain folders belonging exclusively
-to another topology. The validator reports those folders before generation.
+Because --import-dirs examines every visible directory beside the YAML file, a
+shared configuration directory may contain folders belonging to other
+topologies. The validator reports and skips them during generation.
 
 The router node type implies forwarding in generated Kathara router images;
 forwarding: false or a command that sets ip_forward=0 is treated as an error.
@@ -268,6 +269,8 @@ Useful simulation options:
   command is sent; default 1.
 - --connect-timeout N: maximum duration of one kathara exec command; default 60.
 - --connect-retries N: number of kathara exec attempts; default 3.
+- --routing-timeout N: maximum time allowed for routes to become reachable from
+  every client; default 120.
 - --plot: generate metric plots.
 - --keep-running: leave the Kathara lab active after the workflow.
 - --dry-run: validate generated remote scripts and print the planned workflow.
@@ -284,6 +287,7 @@ Advanced parameters can be supplied through environment variables:
     SIM_ATTACK_START_DELAY
     SIM_CONNECT_TIMEOUT
     SIM_CONNECT_RETRIES
+    SIM_ROUTING_TIMEOUT
     SIM_ROUTING_RETRIES
 
 ## Attack timing and load model
@@ -429,6 +433,9 @@ The service supports the following environment variables:
 ## Troubleshooting
 
 - Ensure Kathara and Docker are available before starting a simulation.
+- Before collecting measurements, simulate.sh verifies that the target is
+  reachable from every client and waits for routing convergence. Increase
+  SIM_ROUTING_TIMEOUT if the laboratory needs more than 120 seconds.
 - If kathara exec is slow after startup, increase SIM_CONNECT_RETRIES or
   SIM_CONNECT_TIMEOUT.
 - If a plot cannot be generated, install matplotlib in the Python environment

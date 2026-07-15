@@ -594,9 +594,9 @@ def validate_semantics(
                 if path.name not in nodes
             ]
             if invalid_dirs:
-                report.error(
+                report.warn(
                     "import_node_missing",
-                    "Directories selected for import without a matching node: "
+                    "Directories skipped because they have no matching node: "
                     + ", ".join(invalid_dirs)
                     + ".",
                 )
@@ -619,7 +619,9 @@ def semantic_report_lines(report: SemanticValidationReport) -> list[str]:
         lines.append(f"[OK] OSPF configuration is coherent on {report.ospf_nodes} nodes")
     if report.bgp_nodes and not report.has_error("bgp_", "router_id_"):
         lines.append(f"[OK] BGP configuration is coherent on {report.bgp_nodes} nodes")
-    if report.import_dirs_checked and not report.has_error("import_"):
+    if report.import_dirs_checked and not any(
+        issue.code.startswith("import_") for issue in report.issues
+    ):
         lines.append("[OK] Imported directories match declared nodes")
 
     lines.extend(f"[{issue.severity}] {issue.message}" for issue in report.issues)
